@@ -1,0 +1,18 @@
+{
+  "name": "etwin-bot",
+  "version": "0.1.0",
+  "description": "Alice 的 E-Twin — 数字分身的外向化镜像。agency 全交 LLM，mini CC 做后端，TG 做通道。",
+  "type": "module",
+  "main": "bot.js",
+  "scripts": {
+    "start": "bun run bot.js",
+    "dryrun": "ETWIN_DRY_RUN=true bun run bot.js",
+    "tick": "bun -e 'import(\"./self-loop.js\").then(m => m.selfTick({ dryRun: process.env.ETWIN_DRY_RUN === \"true\" }))'"
+  },
+  "dependencies": {
+    "grammy": "^1.30.0"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  }
+}

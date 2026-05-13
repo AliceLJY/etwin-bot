@@ -1,0 +1,142 @@
+// context.js — 收集当前状态 context 喂给 LLM self-loop
+
+import { readFileSync, statSync, existsSync, readdirSync } from "fs";
+import { join } from "path";
+import { execFileSync } from "child_process";
+import { homedir } from "os";
+
+const PROJECT_DIR = import.meta.dir;
+const ACTION_LOG = join(PROJECT_DIR, "data/action-log.json");
+const HOME = homedir();
+
+// 读 bot 自己的 action 历史
+export function loadActionLog() {
+  if (!existsSync(ACTION_LOG)) return [];
+  try {
+    return JSON.parse(readFileSync(ACTION_LOG, "utf-8"));
+  } catch (_e) {
+    return [];
+  }
+}
+
+// 取过去 N 小时的 action
+export function recentActions(hours = 48) {
+  const log = loadActionLog();
+  const cutoff = Date.now() - hours * 3600_000;
+  return log.filter((a) => new Date(a.time).getTime() > cutoff);
+}
+
+// 算 Alice 互动率（基于 alice_reaction 字段）
+export function interactionStats(days = 7) {
+  const log = loadActionLog();
+  const cutoff = Date.now() - days * 86400_000;
+  const pings = log.filter(
+    (a) => a.action === "ping" && new Date(a.time).getTime() > cutoff,
+  );
+  if (pings.length === 0) {
+    return { total: 0, engaged: 0, delayed: 0, seen_no_reply: 0, unread: 0, engagement_rate: null };
+  }
+  const counts = { engaged: 0, delayed: 0, seen_no_reply: 0, unread: 0 };
+  for (const p of pings) {
+    const r = p.alice_reaction || "unread";
+    if (counts[r] !== undefined) counts[r]++;
+  }
+  return {
+    total: pings.length,
+    ...counts,
+    engagement_rate: ((counts.engaged + counts.delayed) / pings.length).toFixed(2),
+  };
+}
+
+// Alice 最后一次和 CC 对话的时间（扫 ~/.claude/projects/-Users-anxianjingya/*.jsonl 最新 mtime）
+function lastCCActivity() {
+  try {
+    const dir = join(HOME, ".claude/projects/-Users-anxianjingya");
+    if (!existsSync(dir)) return null;
+    const files = readdirSync(dir).filter((f) => f.endsWith(".jsonl"));
+    if (files.length === 0) return null;
+    let latest = 0;
+    for (const f of files) {
+      try {
+        const m = statSync(join(dir, f)).mtimeMs;
+        if (m > latest) latest = m;
+      } catch (_) {}
+    }
+    return latest > 0 ? new Date(latest).toISOString() : null;
+  } catch (_e) {
+    return null;
+  }
+}
+
+// Alice 最近 git push 时间（扫主力仓库）
+function lastGitActivity() {
+  const repos = [
+    join(HOME, "Projects/telegram-ai-bridge"),
+    join(HOME, "Projects/wechat-ai-bridge"),
+    join(HOME, "Projects/etwin-bot"),
+    join(HOME, "Projects/河马项目/hippo-wiki"),
+    join(HOME, "Downloads/sync-bridge"),
+  ];
+  let latest = 0;
+  for (const r of repos) {
+    if (!existsSync(join(r, ".git"))) continue;
+    try {
+      const out = execFileSync("git", ["log", "-1", "--format=%ct"], {
+        cwd: r,
+        encoding: "utf-8",
+        timeout: 5000,
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim();
+      const ts = parseInt(out, 10);
+      if (ts && ts * 1000 > latest) latest = ts * 1000;
+    } catch (_) {}
+  }
+  return latest > 0 ? new Date(latest).toISOString() : null;
+}
+
+// RecallNest etwin:alice scope 的 latest checkpoint
+// 第一版用 ssh mini 调 RecallNest CLI，失败就 fallback 到 null
+async function fetchLatestCheckpoint() {
+  try {
+    const sshHost = process.env.MINI_SSH_HOST || "mini";
+    const out = execFileSync(
+      "ssh",
+      [
+        sshHost,
+        "cd ~/recallnest && /Users/anxianjingya/.bun/bin/bun run src/cli.ts latest-checkpoint --scope etwin:alice --json 2>/dev/null || echo {}",
+      ],
+      {
+        encoding: "utf-8",
+        timeout: 10000,
+        stdio: ["ignore", "pipe", "ignore"],
+      },
+    ).trim();
+    return JSON.parse(out || "{}");
+  } catch (_e) {
+    return null;
+  }
+}
+
+// 收集完整 context
+export async function gatherContext() {
+  const now = new Date();
+  const ccLast = lastCCActivity();
+  const gitLast = lastGitActivity();
+  const checkpoint = await fetchLatestCheckpoint();
+
+  const hoursSince = (iso) => {
+    if (!iso) return null;
+    return Math.round((now.getTime() - new Date(iso).getTime()) / 3600_000 * 10) / 10;
+  };
+
+  return {
+    time_now: now.toISOString(),
+    hour_of_day: now.getHours(),
+    day_of_week: now.toLocaleDateString("en-US", { weekday: "long" }),
+    alice_last_cc_hours_ago: hoursSince(ccLast),
+    alice_last_git_hours_ago: hoursSince(gitLast),
+    latest_recallnest_checkpoint: checkpoint,
+    bot_recent_actions_48h: recentActions(48),
+    alice_interaction_stats_7d: interactionStats(7),
+  };
+}
