@@ -3,11 +3,50 @@
 // grammy reactive 对话 + self-loop proactive 自驱
 
 import { Bot, GrammyError } from "grammy";
-import { readFileSync, writeFileSync, existsSync } from "fs";
+import { HttpsProxyAgent } from "https-proxy-agent";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, renameSync } from "fs";
 import { join } from "path";
 import { callMiniCC } from "./llm.js";
 import { gatherContext } from "./context.js";
 import { startSelfLoop, markAliceReaction } from "./self-loop.js";
+
+// 下载 TG 文件到本地（参考 telegram-ai-bridge bridge.js downloadFile）
+const FILE_DIR = join(import.meta.dir, "files");
+mkdirSync(FILE_DIR, { recursive: true });
+
+// 启动时清理 30+ 天前的旧文件
+(function cleanupOldFiles() {
+  const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  try {
+    const trash = join(process.env.HOME || "/Users/anxianjingya", ".Trash");
+    let moved = 0;
+    for (const f of readdirSync(FILE_DIR)) {
+      try {
+        const p = join(FILE_DIR, f);
+        if (statSync(p).mtimeMs < cutoff) {
+          renameSync(p, join(trash, `etwin-bot-${Date.now()}-${f}`));
+          moved++;
+        }
+      } catch (_) {}
+    }
+    if (moved > 0) console.log(`[startup-cleanup] 移走 ${moved} 个 30+ 天前文件`);
+  } catch (_) {}
+})();
+
+async function downloadTGFile(ctx, fileId, filename) {
+  const file = await ctx.api.getFile(fileId);
+  const TOKEN = process.env.TG_BOT_TOKEN;
+  const url = `https://api.telegram.org/file/bot${TOKEN}/${file.file_path}`;
+  const PROXY = process.env.HTTPS_PROXY || process.env.https_proxy;
+  const resp = PROXY
+    ? await fetch(url, { agent: new HttpsProxyAgent(PROXY) })
+    : await fetch(url);
+  if (!resp.ok) throw new Error(`Download failed: ${resp.status} ${resp.statusText}`);
+  const buffer = Buffer.from(await resp.arrayBuffer());
+  const localPath = join(FILE_DIR, `${Date.now()}-${filename}`);
+  writeFileSync(localPath, buffer);
+  return localPath;
+}
 
 const PROJECT_DIR = import.meta.dir;
 const REPLY_PROMPT_PATH = join(PROJECT_DIR, "prompts/reply.md");
@@ -89,26 +128,60 @@ bot.command("quiet", async (ctx) => {
   console.log(`[bot] /quiet from chat ${ctx.chat.id}`);
 });
 
-// 所有 text 消息：reactive 对话
-bot.on("message:text", async (ctx) => {
-  // 仅响应 Alice
-  if (ALICE_CHAT_ID && String(ctx.chat.id) !== String(ALICE_CHAT_ID)) {
-    console.log(`[bot] 忽略非 Alice 的消息 chat_id=${ctx.chat.id}`);
+// 图片：下载到本地 + prompt 里塞绝对路径让 LLM 自己 Read 看
+bot.on("message:photo", async (ctx) => {
+  if (ALICE_CHAT_ID && String(ctx.chat.id) !== String(ALICE_CHAT_ID)) return;
+  const photo = ctx.message.photo;
+  const largest = photo[photo.length - 1];
+  const caption = ctx.message.caption || "看看这张图";
+  try {
+    const localPath = await downloadTGFile(ctx, largest.file_id, "photo.jpg");
+    console.log(`[bot] Alice → bot: [photo] ${localPath}`);
+    await handleMessage(ctx, `${caption}\n\n[图片文件: ${localPath}]`);
+  } catch (e) {
+    await ctx.reply(`图片下载失败: ${e.message}`);
+  }
+});
+
+// 文档：同图片处理
+bot.on("message:document", async (ctx) => {
+  if (ALICE_CHAT_ID && String(ctx.chat.id) !== String(ALICE_CHAT_ID)) return;
+  const doc = ctx.message.document;
+  const caption = ctx.message.caption || `看看这个文件: ${doc.file_name}`;
+  if (doc.file_size > 20 * 1024 * 1024) {
+    await ctx.reply("文件太大（超过 20MB），TG Bot API 限制。");
     return;
   }
+  try {
+    const localPath = await downloadTGFile(ctx, doc.file_id, doc.file_name || "file");
+    console.log(`[bot] Alice → bot: [document] ${localPath}`);
+    await handleMessage(ctx, `${caption}\n\n[文件: ${localPath}]`);
+  } catch (e) {
+    await ctx.reply(`文件下载失败: ${e.message}`);
+  }
+});
 
-  const userMsg = ctx.message.text;
-  console.log(`[bot] Alice → bot: ${userMsg.slice(0, 100)}`);
+// 语音：下载传给 CC，让 CC 用 Read tool 看（CC 能识别音频）
+bot.on("message:voice", async (ctx) => {
+  if (ALICE_CHAT_ID && String(ctx.chat.id) !== String(ALICE_CHAT_ID)) return;
+  try {
+    const localPath = await downloadTGFile(ctx, ctx.message.voice.file_id, "voice.ogg");
+    console.log(`[bot] Alice → bot: [voice] ${localPath}`);
+    await handleMessage(ctx, `[语音文件: ${localPath}] 听听这段语音再回我`);
+  } catch (e) {
+    await ctx.reply(`语音下载失败: ${e.message}`);
+  }
+});
 
-  // 更新 self-loop 的 alice_reaction：她在回复 = engaged
+// 统一处理（reply.md 路径），text/photo/document/voice 都走这里
+async function handleMessage(ctx, userMsg) {
+  // 更新 self-loop 的 alice_reaction
   markAliceReaction({ withinHours: 24 }, "engaged");
 
-  // 记录对话历史
   const history = loadHistory();
   history.push({ role: "user", content: userMsg, time: new Date().toISOString() });
 
   try {
-    // 显示 typing
     await ctx.replyWithChatAction("typing");
 
     const context = await gatherContext();
@@ -120,17 +193,14 @@ bot.on("message:text", async (ctx) => {
       .replace("{{conversation_history}}", JSON.stringify(recentHistory, null, 2));
 
     if (DRY_RUN) {
-      console.log("[bot dry-run] 不实际调 LLM");
-      await ctx.reply("[dry-run] 当前是 dry-run 模式，未真调 mini CC。");
+      await ctx.reply("[dry-run] 当前是 dry-run 模式，未真调 LLM。");
       return;
     }
 
     const reply = await callMiniCC(userPrompt);
-
     history.push({ role: "assistant", content: reply, time: new Date().toISOString() });
     saveHistory(history);
 
-    // 按 \n\n 切多条 + typing 节奏发送（像真人聊天）
     await sendAsMulti({ bot, chatId: ctx.chat.id, text: reply });
     const segCount = splitMessages(reply).length;
     console.log(`[bot] bot → Alice: ${segCount} 段, 首段: ${reply.slice(0, 80)}`);
@@ -140,6 +210,17 @@ bot.on("message:text", async (ctx) => {
       await ctx.reply(`唉，我那边出了点问题：${e.message.slice(0, 200)}\n（这条不算 E-Twin 的话，是 plumbing error）`);
     } catch (_) {}
   }
+}
+
+// 所有 text 消息：reactive 对话
+bot.on("message:text", async (ctx) => {
+  // 仅响应 Alice
+  if (ALICE_CHAT_ID && String(ctx.chat.id) !== String(ALICE_CHAT_ID)) {
+    console.log(`[bot] 忽略非 Alice 的消息 chat_id=${ctx.chat.id}`);
+    return;
+  }
+
+  await handleMessage(ctx, ctx.message.text);
 });
 
 bot.catch((err) => {
