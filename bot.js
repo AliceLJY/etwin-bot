@@ -240,7 +240,8 @@ async function handleMessage(ctx, userMsg) {
       return;
     }
 
-    const reply = await callMiniCC(userPrompt);
+    // 显式 kind="reactive" 避免和 self-loop 串台
+    const reply = await callMiniCC(userPrompt, { kind: "reactive" });
     history.push({ role: "assistant", content: reply, time: new Date().toISOString() });
     saveHistory(history);
 

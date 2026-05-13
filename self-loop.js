@@ -41,7 +41,8 @@ export async function selfTick({ sendMessage, dryRun = false } = {}) {
 
   let llmOutput;
   try {
-    llmOutput = await callMiniCC(userPrompt, { dryRun });
+    // 关键：kind="self-loop" 让 self-loop 用独立 session，不污染 reactive session
+    llmOutput = await callMiniCC(userPrompt, { dryRun, kind: "self-loop" });
   } catch (e) {
     console.error("[self-loop] LLM call failed:", e.message);
     appendAction({
