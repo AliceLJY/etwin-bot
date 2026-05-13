@@ -9,6 +9,7 @@ import { join } from "path";
 import { callMiniCC } from "./llm.js";
 import { gatherContext } from "./context.js";
 import { startSelfLoop, markAliceReaction } from "./self-loop.js";
+import { shouldDistill, runDistill } from "./distill.js";
 
 // 下载 TG 文件到本地（参考 telegram-ai-bridge bridge.js downloadFile）
 const FILE_DIR = join(import.meta.dir, "files");
@@ -248,6 +249,14 @@ async function handleMessage(ctx, userMsg) {
     await sendAsMulti({ bot, chatId: ctx.chat.id, text: reply });
     const segCount = splitMessages(reply).length;
     console.log(`[bot] bot → Alice: ${segCount} 段, 首段: ${reply.slice(0, 80)}`);
+
+    // 回复完成后检查是否需要 distill（后台跑不阻塞）
+    if (shouldDistill()) {
+      console.log("[bot] history 达阈值，后台触发 distill");
+      runDistill().then((r) => {
+        if (r) console.log(`[bot] distill 完成: 压缩 ${r.compressed} 条 → 新增 ${r.new_memory} 条 memory`);
+      }).catch((e) => console.error("[bot] distill 失败:", e.message));
+    }
   } catch (e) {
     console.error("[bot] reply 失败:", e.message);
     try {
