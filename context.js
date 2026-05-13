@@ -7,7 +7,19 @@ import { homedir } from "os";
 
 const PROJECT_DIR = import.meta.dir;
 const ACTION_LOG = join(PROJECT_DIR, "data/action-log.json");
+const CONV_HISTORY = join(PROJECT_DIR, "data/conversation-history.json");
 const HOME = homedir();
+
+// 读最近 N 轮对话历史（让 self-loop LLM 能看到 Alice 最近说的话，识别 pause signal）
+function loadRecentConversation(n = 10) {
+  if (!existsSync(CONV_HISTORY)) return [];
+  try {
+    const all = JSON.parse(readFileSync(CONV_HISTORY, "utf-8"));
+    return all.slice(-n);
+  } catch (_e) {
+    return [];
+  }
+}
 
 // 读 bot 自己的 action 历史
 export function loadActionLog() {
@@ -138,5 +150,7 @@ export async function gatherContext() {
     latest_recallnest_checkpoint: checkpoint,
     bot_recent_actions_48h: recentActions(48),
     alice_interaction_stats_7d: interactionStats(7),
+    // 让 self-loop LLM 看 Alice 最近说的话，识别 "我去看戏"/"忙"/"晚点聊" 之类 pause signal
+    recent_conversation: loadRecentConversation(10),
   };
 }
