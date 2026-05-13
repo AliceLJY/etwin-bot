@@ -1,21 +1,28 @@
-// llm.js — 通过 ssh mini claude -p 调用 mini 端 CC
-// 单次推理，stdin 喂 prompt，stdout 拿结果
+// llm.js — Claude Agent SDK 调用 + session resume 让 cache 复用
+// 取代旧版的 spawn `claude -p` 子进程模式
 
-import { spawn } from "child_process";
-import { readFileSync } from "fs";
+import { query } from "@anthropic-ai/claude-agent-sdk";
+import { readFileSync, writeFileSync, existsSync } from "fs";
 import { join } from "path";
+import { homedir } from "os";
 
 const PROJECT_DIR = import.meta.dir;
+const SESSION_STORE = join(PROJECT_DIR, "data/session-ids.json");
 
-const SSH_HOST = process.env.MINI_SSH_HOST || "mini";
-const CLAUDE_BIN = process.env.MINI_CLAUDE_BIN || "/Users/anxianjingya/.local/bin/claude";
-const TIMEOUT_MS = parseInt(process.env.LLM_TIMEOUT_MS || "120000", 10);
-// transport mode: local-cc | mini-cc
-const LLM_MODE = process.env.ETWIN_LLM_MODE || "local-cc";
-// model: claude-sonnet-4-6 默认（cost 友好），可改 claude-opus-4-7 / claude-haiku-4-5
+// SDK 0.2.117+ 砍掉了内置 cli.js，必须显式传 claude CLI 路径
+const CLAUDE_CLI_PATH =
+  process.env.CLAUDE_CLI_PATH || join(homedir(), ".local/bin/claude");
+
 const LLM_MODEL = process.env.ETWIN_LLM_MODEL || "claude-sonnet-4-6";
+const LLM_EFFORT = process.env.ETWIN_LLM_EFFORT || null; // 不指定走默认
 
-// 读 persona 三件套拼成完整 system prompt
+// 让 etwin-bot 产生的 session 也能出现在终端 /resume 列表
+// 详见 telegram-ai-bridge/adapters/claude.js 同款 hack
+if (!process.env.CLAUDE_CODE_ENTRYPOINT) {
+  process.env.CLAUDE_CODE_ENTRYPOINT = "cli";
+}
+
+// 读 persona 三件套拼成 system prompt append
 export function buildSystemPrompt() {
   const base = readFileSync(join(PROJECT_DIR, "persona/digital-clone-base.md"), "utf-8");
   const profile = readFileSync(join(PROJECT_DIR, "persona/digital-clone-profile.md"), "utf-8");
@@ -23,89 +30,126 @@ export function buildSystemPrompt() {
   return `${base}\n\n---\n\n${profile}\n\n---\n\n${tuning}`;
 }
 
-// 用 mini 上的 CC 跑一次单 turn 推理
-// promptText 是拼好的完整用户消息（含 system prompt 注入由 -p 自身处理）
-// 但 -p 没有 system flag——把 system 拼进 prompt 顶部即可
-export async function callMiniCC(userPrompt, opts = {}) {
-  const dryRun = opts.dryRun || process.env.ETWIN_DRY_RUN === "true";
-  const includeSystem = opts.includeSystem !== false;
-
-  let fullPrompt = userPrompt;
-  if (includeSystem) {
-    fullPrompt = `${buildSystemPrompt()}\n\n---\n\n# 当前请求\n\n${userPrompt}`;
+// 持久化 session id：让 self-loop / reactive 各自维护一个 session 用于 resume
+// kind: "self-loop" | "reactive"
+function loadSessionId(kind) {
+  if (!existsSync(SESSION_STORE)) return null;
+  try {
+    const data = JSON.parse(readFileSync(SESSION_STORE, "utf-8"));
+    return data[kind] || null;
+  } catch (_e) {
+    return null;
   }
-
-  if (dryRun) {
-    console.log("[llm dry-run] prompt 长度:", fullPrompt.length);
-    console.log("[llm dry-run] prompt 前 300 字:", fullPrompt.slice(0, 300));
-    return JSON.stringify({
-      action: "silent",
-      message: "",
-      reasoning: "[dry-run mock] llm.js dry-run 模式，未真调 LLM",
-      next_check_hint: "4_hours",
-    });
-  }
-
-  return new Promise((resolve, reject) => {
-    let proc;
-    const claudeArgs = ["-p", "--output-format=json", "--model", LLM_MODEL];
-    if (LLM_MODE === "mini-cc") {
-      proc = spawn("ssh", [SSH_HOST, CLAUDE_BIN, ...claudeArgs], {
-        stdio: ["pipe", "pipe", "pipe"],
-      });
-    } else if (LLM_MODE === "local-cc") {
-      proc = spawn(CLAUDE_BIN, claudeArgs, {
-        stdio: ["pipe", "pipe", "pipe"],
-      });
-    } else {
-      reject(new Error(`Unknown ETWIN_LLM_MODE=${LLM_MODE} (expected 'local-cc' or 'mini-cc')`));
-      return;
-    }
-
-    let stdout = "";
-    let stderr = "";
-
-    const timer = setTimeout(() => {
-      try { proc.kill("SIGTERM"); } catch (_) {}
-      reject(new Error(`LLM call timeout after ${TIMEOUT_MS}ms`));
-    }, TIMEOUT_MS);
-
-    proc.stdout.on("data", (d) => { stdout += d; });
-    proc.stderr.on("data", (d) => { stderr += d; });
-
-    proc.on("close", (code) => {
-      clearTimeout(timer);
-      if (code !== 0) {
-        reject(new Error(`mini CC exit ${code}\nstderr: ${stderr.slice(0, 500)}`));
-        return;
-      }
-      try {
-        const parsed = JSON.parse(stdout);
-        // CC -p JSON 输出结构：{ type: "result", result: "...", session_id: "...", ... }
-        resolve(parsed.result || stdout.trim());
-      } catch (_e) {
-        // fallback 当作 plain text
-        resolve(stdout.trim());
-      }
-    });
-
-    proc.stdin.write(fullPrompt);
-    proc.stdin.end();
-  });
 }
 
-// 解析 LLM 返回的 JSON（self-decision prompt 的输出）
-// 容错：LLM 偶尔会用 ```json ... ``` 包裹
+function saveSessionId(kind, sessionId) {
+  let data = {};
+  if (existsSync(SESSION_STORE)) {
+    try { data = JSON.parse(readFileSync(SESSION_STORE, "utf-8")); } catch (_) {}
+  }
+  data[kind] = sessionId;
+  data[`${kind}_updated`] = new Date().toISOString();
+  writeFileSync(SESSION_STORE, JSON.stringify(data, null, 2));
+}
+
+// 核心调用：走 SDK，session resume + cache hit
+// opts.kind: "self-loop" | "reactive" — 不同 kind 各自维护 session
+// opts.dryRun: 干跑不真调
+// opts.fresh: 不 resume，强制新 session
+// 返回 string（assistant 输出的文本）
+export async function callClaudeSDK(userPrompt, opts = {}) {
+  const dryRun = opts.dryRun || process.env.ETWIN_DRY_RUN === "true";
+  const kind = opts.kind || "reactive";
+
+  if (dryRun) {
+    console.log(`[llm dry-run kind=${kind}] prompt 长度:`, userPrompt.length);
+    console.log("[llm dry-run] prompt 前 300 字:", userPrompt.slice(0, 300));
+    if (kind === "self-loop") {
+      return JSON.stringify({
+        action: "silent",
+        message: "",
+        reasoning: "[dry-run mock] llm.js dry-run 模式，未真调 SDK",
+        next_check_hint: "4_hours",
+      });
+    }
+    return "[dry-run] 当前是 dry-run 模式，未真调 SDK。";
+  }
+
+  const resumeId = opts.fresh ? null : loadSessionId(kind);
+
+  const sdkOptions = {
+    model: LLM_MODEL,
+    permissionMode: "bypassPermissions",
+    allowDangerouslySkipPermissions: true,
+    cwd: PROJECT_DIR,
+    pathToClaudeCodeExecutable: CLAUDE_CLI_PATH,
+    // 不读 ~/.claude/CLAUDE.md 等 setting 文件，避免 Alice 工程规则污染 E-Twin 人格
+    settingSources: [],
+    systemPrompt: {
+      type: "preset",
+      preset: "claude_code",
+      append: buildSystemPrompt(),
+    },
+    // self-loop 单 turn 决策，reactive 允许多 turn（含 tool 调用空间）
+    maxTurns: kind === "self-loop" ? 1 : 3,
+    // SDK 子进程 stderr 转发到 etwin-bot stderr 方便排错
+    stderr: (data) => process.stderr.write(`[SDK stderr] ${data}`),
+  };
+
+  if (LLM_EFFORT) sdkOptions.effort = LLM_EFFORT;
+  if (resumeId) sdkOptions.resume = resumeId;
+
+  let resultText = "";
+  let observedSessionId = resumeId;
+
+  try {
+    for await (const ev of query({ prompt: userPrompt, options: sdkOptions })) {
+      // system event 携带 session_id（新 session 时）
+      if (ev.type === "system" && ev.session_id) {
+        observedSessionId = ev.session_id;
+      }
+      // assistant message 累积文本
+      if (ev.type === "assistant" && ev.message?.content) {
+        const text = ev.message.content
+          .filter((c) => c.type === "text")
+          .map((c) => c.text)
+          .join("");
+        resultText += text;
+      }
+      // result event 是收尾信号
+      if (ev.type === "result") {
+        // result.result 是最终汇总文本（fallback：如果 streaming 漏了）
+        if (!resultText && ev.result) resultText = ev.result;
+      }
+    }
+  } catch (err) {
+    // resume 失败（thinking signature 过期 / session 被删等）→ 自动 fresh 重试一次
+    if (resumeId && /invalid.*signature|invalid_request_error|session.*not.*found/i.test(err.message)) {
+      console.warn(`[llm] resume sid=${resumeId.slice(0, 8)} 失败 (${err.message.slice(0, 80)})，新开 session 重试`);
+      return await callClaudeSDK(userPrompt, { ...opts, fresh: true });
+    }
+    throw err;
+  }
+
+  if (observedSessionId && observedSessionId !== resumeId) {
+    saveSessionId(kind, observedSessionId);
+    console.log(`[llm] saved session_id kind=${kind} sid=${observedSessionId.slice(0, 8)}`);
+  }
+
+  return resultText;
+}
+
+// 解析 self-loop 的 JSON 输出（容错 markdown code fence）
 export function parseDecisionJSON(text) {
   let cleaned = text.trim();
-  // 剥 markdown code fence
   cleaned = cleaned.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
-  // 找第一个 { 到最后一个 }
   const start = cleaned.indexOf("{");
   const end = cleaned.lastIndexOf("}");
   if (start === -1 || end === -1) {
     throw new Error(`No JSON object found in LLM output: ${text.slice(0, 200)}`);
   }
-  const jsonStr = cleaned.slice(start, end + 1);
-  return JSON.parse(jsonStr);
+  return JSON.parse(cleaned.slice(start, end + 1));
 }
+
+// 兼容旧 API 名字
+export const callMiniCC = callClaudeSDK;

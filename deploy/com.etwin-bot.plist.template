@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.etwin-bot</string>
+
+	<key>WorkingDirectory</key>
+	<string>/Users/anxianjingya/Projects/etwin-bot</string>
+
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>-c</string>
+		<string>cd /Users/anxianjingya/Projects/etwin-bot &amp;&amp; set -a &amp;&amp; source .env &amp;&amp; set +a &amp;&amp; exec /Users/anxianjingya/.bun/bin/bun run bot.js</string>
+	</array>
+
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/Users/anxianjingya/.bun/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+		<key>HTTPS_PROXY</key>
+		<string>http://127.0.0.1:7890</string>
+		<key>HTTP_PROXY</key>
+		<string>http://127.0.0.1:7890</string>
+		<key>ALL_PROXY</key>
+		<string>http://127.0.0.1:7890</string>
+	</dict>
+
+	<key>RunAtLoad</key>
+	<true/>
+
+	<key>KeepAlive</key>
+	<true/>
+
+	<key>StandardOutPath</key>
+	<string>/Users/anxianjingya/Projects/etwin-bot/etwin-bot.log</string>
+
+	<key>StandardErrorPath</key>
+	<string>/Users/anxianjingya/Projects/etwin-bot/etwin-bot.log</string>
+
+	<key>ExitTimeOut</key>
+	<integer>30</integer>
+</dict>
+</plist>
