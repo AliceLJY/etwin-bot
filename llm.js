@@ -22,12 +22,33 @@ if (!process.env.CLAUDE_CODE_ENTRYPOINT) {
   process.env.CLAUDE_CODE_ENTRYPOINT = "cli";
 }
 
-// 读 persona 三件套拼成 system prompt append
+// 读 persona 三件套 + 追加 long-term-memory 拼成 system prompt append
 export function buildSystemPrompt() {
   const base = readFileSync(join(PROJECT_DIR, "persona/digital-clone-base.md"), "utf-8");
   const profile = readFileSync(join(PROJECT_DIR, "persona/digital-clone-profile.md"), "utf-8");
   const tuning = readFileSync(join(PROJECT_DIR, "persona/e-tuning.md"), "utf-8");
-  return `${base}\n\n---\n\n${profile}\n\n---\n\n${tuning}`;
+
+  // long-term memory 注入（每次 distill 后自动累积）
+  let memorySection = "";
+  const memPath = join(PROJECT_DIR, "data/long-term-memory.json");
+  if (existsSync(memPath)) {
+    try {
+      const memory = JSON.parse(readFileSync(memPath, "utf-8"));
+      if (Array.isArray(memory) && memory.length > 0) {
+        // 按 importance 倒序，重要的先看
+        const sorted = [...memory].sort((a, b) => (b.importance || 0) - (a.importance || 0));
+        const lines = sorted.map((m) => {
+          const cat = m.category || "fact";
+          const imp = typeof m.importance === "number" ? m.importance.toFixed(2) : "?";
+          const period = m.period ? ` [${m.period}]` : "";
+          return `- [${cat} · imp=${imp}]${period} ${m.fact}`;
+        });
+        memorySection = `\n\n---\n\n# Long-term Memory（你和 Alice 关系中累积的关键 facts，distill 自动生成）\n\n${lines.join("\n")}\n\n这些是你"长大"过程里沉淀的记忆。每次 distill 时会自动累积。你说话时不需要刻意引用，但内心保有这些知道。`;
+      }
+    } catch (_) {}
+  }
+
+  return `${base}\n\n---\n\n${profile}\n\n---\n\n${tuning}${memorySection}`;
 }
 
 // 持久化 session id：让 self-loop / reactive 各自维护一个 session 用于 resume
