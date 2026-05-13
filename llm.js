@@ -10,6 +10,10 @@ const PROJECT_DIR = import.meta.dir;
 const SSH_HOST = process.env.MINI_SSH_HOST || "mini";
 const CLAUDE_BIN = process.env.MINI_CLAUDE_BIN || "/Users/anxianjingya/.local/bin/claude";
 const TIMEOUT_MS = parseInt(process.env.LLM_TIMEOUT_MS || "120000", 10);
+// transport mode: local-cc | mini-cc
+const LLM_MODE = process.env.ETWIN_LLM_MODE || "local-cc";
+// model: claude-sonnet-4-6 默认（cost 友好），可改 claude-opus-4-7 / claude-haiku-4-5
+const LLM_MODEL = process.env.ETWIN_LLM_MODEL || "claude-sonnet-4-6";
 
 // 读 persona 三件套拼成完整 system prompt
 export function buildSystemPrompt() {
@@ -43,10 +47,20 @@ export async function callMiniCC(userPrompt, opts = {}) {
   }
 
   return new Promise((resolve, reject) => {
-    // ssh mini claude -p --output-format=json
-    const proc = spawn("ssh", [SSH_HOST, CLAUDE_BIN, "-p", "--output-format=json"], {
-      stdio: ["pipe", "pipe", "pipe"],
-    });
+    let proc;
+    const claudeArgs = ["-p", "--output-format=json", "--model", LLM_MODEL];
+    if (LLM_MODE === "mini-cc") {
+      proc = spawn("ssh", [SSH_HOST, CLAUDE_BIN, ...claudeArgs], {
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+    } else if (LLM_MODE === "local-cc") {
+      proc = spawn(CLAUDE_BIN, claudeArgs, {
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+    } else {
+      reject(new Error(`Unknown ETWIN_LLM_MODE=${LLM_MODE} (expected 'local-cc' or 'mini-cc')`));
+      return;
+    }
 
     let stdout = "";
     let stderr = "";
