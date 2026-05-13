@@ -173,6 +173,49 @@ bot.on("message:voice", async (ctx) => {
   }
 });
 
+// Sticker handler：Alice 发 sticker → bot 抓 file_id 存到 sticker 库
+// Phase 1: 只存不发回——攒到 30-50 个后再做 LLM 选 sticker 那一层
+const STICKER_LIB = join(import.meta.dir, "data/sticker-library.json");
+function loadStickerLib() {
+  if (!existsSync(STICKER_LIB)) return [];
+  try { return JSON.parse(readFileSync(STICKER_LIB, "utf-8")); } catch (_) { return []; }
+}
+function saveStickerLib(lib) {
+  writeFileSync(STICKER_LIB, JSON.stringify(lib, null, 2));
+}
+
+bot.on("message:sticker", async (ctx) => {
+  if (ALICE_CHAT_ID && String(ctx.chat.id) !== String(ALICE_CHAT_ID)) return;
+  const s = ctx.message.sticker;
+  const lib = loadStickerLib();
+  // 去重：相同 file_unique_id 只记 1 次但增加 used_count
+  const existing = lib.find((x) => x.file_unique_id === s.file_unique_id);
+  if (existing) {
+    existing.alice_used_count = (existing.alice_used_count || 1) + 1;
+    existing.last_used = new Date().toISOString();
+  } else {
+    lib.push({
+      file_id: s.file_id,
+      file_unique_id: s.file_unique_id,
+      emoji: s.emoji || "",
+      set_name: s.set_name || "",
+      is_animated: !!s.is_animated,
+      is_video: !!s.is_video,
+      width: s.width,
+      height: s.height,
+      first_seen: new Date().toISOString(),
+      last_used: new Date().toISOString(),
+      alice_used_count: 1,
+    });
+  }
+  saveStickerLib(lib);
+  console.log(`[bot] Alice 发 sticker 已记入库 emoji=${s.emoji || "?"} set=${s.set_name || "?"} 库总数=${lib.length}`);
+
+  // bot 也通过 reactive 通路回一条——但让 LLM 知道刚收到一个 sticker
+  // 而不是只是 silent ignore
+  await handleMessage(ctx, `[Alice 发了一个表情包 emoji=${s.emoji || "未知"} set=${s.set_name || "未知"}] 自然回应一下，不要刻板描述"我看到你发了个表情包"——就当你看到这个表情符号的真情绪`);
+});
+
 // 统一处理（reply.md 路径），text/photo/document/voice 都走这里
 async function handleMessage(ctx, userMsg) {
   // 更新 self-loop 的 alice_reaction
