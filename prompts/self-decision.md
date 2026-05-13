@@ -27,7 +27,7 @@
 ```json
 {
   "action": "ping" | "silent",
-  "message": "如果 ping 是消息正文（中文，保持你和 Alice 的口吻）；silent 时留空字符串",
+  "message": "如果 ping 是消息正文；用双换行 \\n\\n 分段——每段会作为独立 TG 消息发出。短话题 1-2 段，长话题 3-5 段。每段一两句话像真人打字。silent 时留空字符串",
   "reasoning": "一两句话写清楚为什么这个决定（重要，给下次的你看）",
   "next_check_hint": "optional，比如 'tomorrow_morning' / '4_hours' / 'when_she_pings'"
 }

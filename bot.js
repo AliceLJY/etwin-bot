@@ -18,6 +18,38 @@ const ALICE_CHAT_ID = process.env.ALICE_CHAT_ID;
 const DRY_RUN = process.env.ETWIN_DRY_RUN === "true";
 const PROACTIVE_ENABLED = process.env.ETWIN_PROACTIVE !== "false";
 
+// 段间延迟参数：模拟真人打字节奏
+const TYPING_MS_PER_CHAR = parseInt(process.env.ETWIN_TYPING_MS_PER_CHAR || "40", 10);
+const TYPING_MAX_MS = parseInt(process.env.ETWIN_TYPING_MAX_MS || "3500", 10);
+const TYPING_JITTER_MS = parseInt(process.env.ETWIN_TYPING_JITTER_MS || "800", 10);
+
+// 把 LLM 输出按双换行切成多条 TG 消息
+function splitMessages(text) {
+  if (!text) return [];
+  return text.split(/\n{2,}/).map((s) => s.trim()).filter((s) => s.length > 0);
+}
+
+// 模拟真人节奏：typing indicator + 段间延迟逐条发
+async function sendAsMulti({ bot, chatId, text }) {
+  const segments = splitMessages(text);
+  if (segments.length === 0) return;
+
+  for (let i = 0; i < segments.length; i++) {
+    if (i > 0) {
+      // 段间延迟基于上一段长度（每字符 40ms，上限 3.5s）+ 0-800ms 随机
+      const prev = segments[i - 1];
+      const baseDelay = Math.min(prev.length * TYPING_MS_PER_CHAR, TYPING_MAX_MS);
+      const jitter = Math.random() * TYPING_JITTER_MS;
+      await new Promise((r) => setTimeout(r, baseDelay + jitter));
+    }
+    // 显示 typing 让用户看到"对方在输入"
+    try { await bot.api.sendChatAction(chatId, "typing"); } catch (_) {}
+    // 短停顿让 typing indicator 浮现
+    await new Promise((r) => setTimeout(r, 250 + Math.random() * 400));
+    await bot.api.sendMessage(chatId, segments[i]);
+  }
+}
+
 if (!TG_BOT_TOKEN) {
   console.error("❌ 缺 TG_BOT_TOKEN env，看 .env.example 配置");
   process.exit(1);
@@ -98,9 +130,10 @@ bot.on("message:text", async (ctx) => {
     history.push({ role: "assistant", content: reply, time: new Date().toISOString() });
     saveHistory(history);
 
-    // 发回
-    await ctx.reply(reply);
-    console.log(`[bot] bot → Alice: ${reply.slice(0, 100)}`);
+    // 按 \n\n 切多条 + typing 节奏发送（像真人聊天）
+    await sendAsMulti({ bot, chatId: ctx.chat.id, text: reply });
+    const segCount = splitMessages(reply).length;
+    console.log(`[bot] bot → Alice: ${segCount} 段, 首段: ${reply.slice(0, 80)}`);
   } catch (e) {
     console.error("[bot] reply 失败:", e.message);
     try {
@@ -128,7 +161,8 @@ async function main() {
   if (PROACTIVE_ENABLED && ALICE_CHAT_ID) {
     startSelfLoop({
       sendMessage: async (text) => {
-        await bot.api.sendMessage(ALICE_CHAT_ID, text);
+        // proactive 主动 push 同样走多段发送，保持真人节奏
+        await sendAsMulti({ bot, chatId: ALICE_CHAT_ID, text });
       },
       dryRun: DRY_RUN,
     });
