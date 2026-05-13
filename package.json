@@ -10,6 +10,7 @@
     "tick": "bun -e 'import(\"./self-loop.js\").then(m => m.selfTick({ dryRun: process.env.ETWIN_DRY_RUN === \"true\" }))'"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.140",
     "grammy": "^1.30.0"
   },
   "engines": {
