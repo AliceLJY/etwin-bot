@@ -129,9 +129,20 @@ export async function selfTick({ sendMessage, dryRun = false } = {}) {
 }
 
 // 启动 self-loop
-export function startSelfLoop({ sendMessage, dryRun = false } = {}) {
-  console.log(`[self-loop] 启动 — interval=${WAKE_INTERVAL_MS}ms dryRun=${dryRun}`);
-  // 启动时不立即跑（避免 bot 一启动就发消息），等一个完整 interval 再开始
+export function startSelfLoop({ sendMessage, dryRun = false, runOnStart = true } = {}) {
+  console.log(`[self-loop] 启动 — interval=${WAKE_INTERVAL_MS}ms dryRun=${dryRun} runOnStart=${runOnStart}`);
+
+  // 启动 30 秒后跑第一次（让 bot 稳定 + Alice 重启完不用等 4 小时看效果）
+  // LLM 自己看 context 决定要不要 ping，可能 silent 也可能 hello
+  if (runOnStart) {
+    setTimeout(() => {
+      console.log("[self-loop] 启动后第一次 tick");
+      selfTick({ sendMessage, dryRun }).catch((e) => {
+        console.error("[self-loop] initial tick 异常:", e);
+      });
+    }, 30000);
+  }
+
   return setInterval(() => {
     selfTick({ sendMessage, dryRun }).catch((e) => {
       console.error("[self-loop] tick 异常:", e);
