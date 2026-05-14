@@ -22,6 +22,59 @@ if (!process.env.CLAUDE_CODE_ENTRYPOINT) {
   process.env.CLAUDE_CODE_ENTRYPOINT = "cli";
 }
 
+// === MCP 注入 + 工具白名单 ===
+// 背景：sdkOptions.settingSources=[] 屏蔽 Alice CLAUDE.md 工程规则避免人格污染，
+// 副作用是 user-scope MCP servers 也跟着没了——E-Twin 只剩 SDK 内置工具，
+// WebFetch 撞 SPA（如 claude.ai/share）就拿空壳。这里把"该有的工具"补回来。
+
+// 从 user-scope ~/.claude.json 抽指定的 MCP server 配置
+// 保 secret 在原文件，未来 JINA_API_KEY / ssh mini 路径变了自动同步
+function loadUserScopeMcpServers(names) {
+  const claudeJsonPath = join(homedir(), ".claude.json");
+  if (!existsSync(claudeJsonPath)) return {};
+  try {
+    const parsed = JSON.parse(readFileSync(claudeJsonPath, "utf-8"));
+    const all = parsed.mcpServers || {};
+    return Object.fromEntries(names.filter(n => all[n]).map(n => [n, all[n]]));
+  } catch (e) {
+    console.error(`[etwin] 读 ~/.claude.json mcpServers 失败: ${e.message}`);
+    return {};
+  }
+}
+
+// E-Twin 该有的 MCP：
+// - playwright: 抓 SPA / 动态渲染页面（claude.ai/share、小红书等）
+// - recallnest: read-only recall Alice 记忆，让 E-Twin 真像 Alice 的分身
+const ETWIN_MCP_SERVERS = {
+  // playwright 通过 plugin 加载不在 ~/.claude.json，直接显式注入
+  playwright: {
+    command: "npx",
+    args: ["@playwright/mcp@latest"],
+  },
+  // recallnest 在 user-scope，复用配置（含 JINA_API_KEY / ssh mini）
+  ...loadUserScopeMcpServers(["recallnest"]),
+};
+
+// 白名单：抓网页 + recall 记忆 + 读自己的 persona/data
+// 不放：Write/Edit/Bash/Task/NotebookEdit（产生持久副作用或能套娃）
+// 不放：mcp__recallnest__store_memory 等写操作（read-only 起步，避免污染 Alice RN）
+const ETWIN_ALLOWED_TOOLS = [
+  "WebFetch",            // HTTP fast-path，普通页面优先走这条
+  "Read",                // 让 E-Twin 读自己 persona/data 目录
+  "Grep",
+  "Glob",
+  "mcp__playwright__browser_navigate",
+  "mcp__playwright__browser_snapshot",
+  "mcp__playwright__browser_take_screenshot",
+  "mcp__playwright__browser_close",
+  "mcp__playwright__browser_wait_for",
+  "mcp__playwright__browser_evaluate",
+  "mcp__recallnest__resume_context",
+  "mcp__recallnest__search_memory",
+  "mcp__recallnest__brief_memory",
+  "mcp__recallnest__retrieve_skill",
+];
+
 // 读 persona 三件套 + 追加 long-term-memory 拼成 system prompt append
 export function buildSystemPrompt() {
   const base = readFileSync(join(PROJECT_DIR, "persona/digital-clone-base.md"), "utf-8");
@@ -104,8 +157,11 @@ export async function callClaudeSDK(userPrompt, opts = {}) {
     allowDangerouslySkipPermissions: true,
     cwd: PROJECT_DIR,
     pathToClaudeCodeExecutable: CLAUDE_CLI_PATH,
-    // 不读 ~/.claude/CLAUDE.md 等 setting 文件，避免 Alice 工程规则污染 E-Twin 人格
+    // 屏蔽 user-scope settings 源避免 Alice CLAUDE.md 工程规则污染 E-Twin 人格
+    // 副作用：user-scope MCP servers 也跟着没了 → 用下面 mcpServers / allowedTools 单独补回
     settingSources: [],
+    mcpServers: ETWIN_MCP_SERVERS,
+    allowedTools: ETWIN_ALLOWED_TOOLS,
     systemPrompt: {
       type: "preset",
       preset: "claude_code",
