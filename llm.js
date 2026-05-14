@@ -167,8 +167,9 @@ export async function callClaudeSDK(userPrompt, opts = {}) {
       preset: "claude_code",
       append: buildSystemPrompt(),
     },
-    // self-loop 单 turn 决策，reactive 允许多 turn（含 tool 调用空间）
-    maxTurns: kind === "self-loop" ? 1 : 3,
+    // self-loop 单 turn 决策；reactive 留够 tool 调用空间
+    // 抓 SPA 路径：navigate → snapshot → close = 3 turn 起，加 recall 记忆 + 文本回复就 5+
+    maxTurns: kind === "self-loop" ? 1 : 8,
     // SDK 子进程 stderr 转发到 etwin-bot stderr 方便排错
     stderr: (data) => process.stderr.write(`[SDK stderr] ${data}`),
   };
