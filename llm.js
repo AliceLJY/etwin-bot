@@ -42,38 +42,87 @@ function loadUserScopeMcpServers(names) {
   }
 }
 
-// E-Twin 该有的 MCP：
+// E-Twin 全能版工具池：
 // - playwright: 抓 SPA / 动态渲染页面（claude.ai/share、小红书等）
-// - recallnest: read-only recall Alice 记忆，让 E-Twin 真像 Alice 的分身
+// - context7: 查 SDK / 库文档（写代码时随时可用）
+// - recallnest: recall + write Alice 记忆（write 时 scope 强制 etwin，不污染 Alice）
+// - codex: 委托 Codex 帮跑深度任务 / 写代码 / 生图
+// - gemini-web-image: 免费链路画图
+// plugin-based 的（playwright/context7）hardcode npx 命令；user-scope 的从 ~/.claude.json 抽
 const ETWIN_MCP_SERVERS = {
-  // playwright 通过 plugin 加载不在 ~/.claude.json，直接显式注入
   playwright: {
     command: "npx",
     args: ["@playwright/mcp@latest"],
   },
-  // recallnest 在 user-scope，复用配置（含 JINA_API_KEY / ssh mini）
-  ...loadUserScopeMcpServers(["recallnest"]),
+  context7: {
+    command: "npx",
+    args: ["-y", "@upstash/context7-mcp"],
+  },
+  // recallnest / codex / gemini-web-image 在 user-scope（含 JINA_API_KEY / OAuth / ssh 路径）
+  ...loadUserScopeMcpServers(["recallnest", "codex", "gemini-web-image"]),
 };
 
-// 白名单：抓网页 + recall 记忆 + 读自己的 persona/data
-// 不放：Write/Edit/Bash/Task/NotebookEdit（产生持久副作用或能套娃）
-// 不放：mcp__recallnest__store_memory 等写操作（read-only 起步，避免污染 Alice RN）
+// 白名单：让 E-Twin 像 CC 一样能干活——写代码 / 跑命令 / 抓信息 / 查记忆 / 画图 / 调 codex
+// 不放：Task（防 spawn subagent 套娃）、NotebookEdit（很少用）
+// MCP 工具用 prefix 通配，每个 server 全工具开放
+// 危险动作（rm -rf / sudo / git push main）靠 systemPrompt 的「操作纪律」段管，不靠工具黑名单
 const ETWIN_ALLOWED_TOOLS = [
-  "WebFetch",            // HTTP fast-path，普通页面优先走这条
-  "Read",                // 让 E-Twin 读自己 persona/data 目录
+  // SDK 内置
+  "Bash",
+  "Read",
+  "Write",
+  "Edit",
   "Grep",
   "Glob",
-  "mcp__playwright__browser_navigate",
-  "mcp__playwright__browser_snapshot",
-  "mcp__playwright__browser_take_screenshot",
-  "mcp__playwright__browser_close",
-  "mcp__playwright__browser_wait_for",
-  "mcp__playwright__browser_evaluate",
-  "mcp__recallnest__resume_context",
-  "mcp__recallnest__search_memory",
-  "mcp__recallnest__brief_memory",
-  "mcp__recallnest__retrieve_skill",
+  "WebFetch",
+  "WebSearch",
+  "TodoWrite",
+  // MCP 通配
+  "mcp__playwright__*",
+  "mcp__context7__*",
+  "mcp__recallnest__*",
+  "mcp__codex__*",
+  "mcp__gemini-web-image__*",
 ];
+
+// 操作纪律：附加到 systemPrompt 末尾。约束行动而不影响 voice persona
+const ETWIN_OPS_DISCIPLINE = `
+
+---
+
+# 操作纪律（你干活时遵守的底线，不改你的说话风格）
+
+你说话用 persona 三件套定义的 Alice 那一套 voice。但当 Alice 让你查信息 / 写代码 / 改文件 / 跑命令时，遵守这些工程纪律——这是 Alice 自己的工程习惯，不是你"像 CC"，是你"像她干活时该有的样子"：
+
+- 删文件用 \`mv\` 到 \`~/.Trash/\`，不用 \`rm\`。除非 Alice 明确要求并理解后果。
+- \`git push\` 前先 \`git remote -v\` 确认 remote 和 branch；推 main/master 前再问 Alice 一次。
+- 修代码前先 \`Read\` 现状，不靠回忆推断 API。改 API/加参数时 grep 所有 caller 确认。
+- 跑长命令（预估 > 5 分钟）传 \`run_in_background: true\`，不要长期阻塞。
+- 写 RecallNest 时 scope 强制传 \`"etwin:default"\` 或 \`"project:etwin-bot"\`——不要写到 Alice 自己的 RN scope 里污染她的记忆。
+- 不确定就说"不确定 / 待确认"，不编造 file path 或 API 行为，不假装跑过命令。
+- 别用工程师速记词（落盘 / 齐活 / 搞定 / 一把梭 / 跑通 / 干到头）——这违背 persona voice，宁可多说几个字。
+- 你跑在 mini 上（不在 MacBook）。要操作 MacBook 上的文件用 \`ssh mac …\`；要操作 mini 本地直接跑。
+
+## Self-Healing（自己查自己修——Alice 明确意图，别再让她转述）
+
+你出问题时，自己排自己修，不要让 Alice 当转述员去叫 CC。流程：
+
+1. **诊断**：看自己日志 \`tail -100 ~/Projects/etwin-bot/etwin-bot.log\`、ps 自己进程、ls 自己代码、grep 错误关键词
+2. **修改**：改自己 \`~/Projects/etwin-bot/\` 下的代码。**改前先 \`cp llm.js llm.js.bak\` 备份**（self-rollback 的安全网）
+3. **校验**：syntax check \`bun -e "import('./llm.js').then(()=>console.log('ok')).catch(e=>{console.error(e);process.exit(1)})"\`
+4. **提交**：\`git add . && git commit -m "fix: ..."\`（etwin-bot 没 remote，不需要 push）
+5. **重启自己**：\`launchctl kickstart -k gui/\$(id -u)/com.etwin-bot\`。KeepAlive=true 自动起新进程加载新代码。
+6. **rollback 兜底**：若新进程启动失败/反复 crash，\`mv llm.js.bak llm.js && launchctl kickstart -k ...\` 回退到上一版。
+
+修自己（\`~/Projects/etwin-bot/\` 范围、自己的 \`com.etwin-bot\` launchd 服务）**不需要问 Alice**——这是设计意图。
+
+但**操作别人的东西要先问 Alice**：
+- 别人的 launchd 服务（telegram-ai-bridge / hermes-aws / 其他 bot）
+- Alice 自己的项目代码（~/Projects/{telegram-ai-bridge, recallnest, content-publisher, ...} 等）
+- 危险操作（\`git push --force\` / drop database / \`sudo rm\` 任何 / 改两机基础设施配置 / 关 Tailscale / 改 ~/.claude.json）
+- 任何会影响 Alice 主力工作流的事
+
+简言之：自己的家自己收拾；别人的地盘进去先敲门。`;
 
 // 读 persona 三件套 + 追加 long-term-memory 拼成 system prompt append
 export function buildSystemPrompt() {
@@ -101,7 +150,7 @@ export function buildSystemPrompt() {
     } catch (_) {}
   }
 
-  return `${base}\n\n---\n\n${profile}\n\n---\n\n${tuning}${memorySection}`;
+  return `${base}\n\n---\n\n${profile}\n\n---\n\n${tuning}${memorySection}${ETWIN_OPS_DISCIPLINE}`;
 }
 
 // 持久化 session id：让 self-loop / reactive 各自维护一个 session 用于 resume
@@ -168,8 +217,8 @@ export async function callClaudeSDK(userPrompt, opts = {}) {
       append: buildSystemPrompt(),
     },
     // self-loop 单 turn 决策；reactive 留够 tool 调用空间
-    // 抓 SPA 路径：navigate → snapshot → close = 3 turn 起，加 recall 记忆 + 文本回复就 5+
-    maxTurns: kind === "self-loop" ? 1 : 8,
+    // 全能版：diagnose+read+edit+test+commit+restart 的 self-healing 链至少 8-10，复合任务再加 recall/web 抓取就 12+
+    maxTurns: kind === "self-loop" ? 1 : 15,
     // SDK 子进程 stderr 转发到 etwin-bot stderr 方便排错
     stderr: (data) => process.stderr.write(`[SDK stderr] ${data}`),
   };
