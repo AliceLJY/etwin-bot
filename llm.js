@@ -12,11 +12,24 @@ ensureRuntimeDirs();
 
 const SESSION_STORE = dataPath("session-ids.json");
 export const DEFAULT_CODEX_TIMEOUT_MS = 600000;
+export const DEFAULT_CLAUDE_SELF_LOOP_MAX_TURNS = 1;
+export const DEFAULT_CLAUDE_REACTIVE_MAX_TURNS = 30;
+
+function parsePositiveInteger(value, fallback) {
+  const parsed = parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
 
 export function resolveCodexTimeoutMs(env = process.env) {
   const raw = env.ETWIN_CODEX_TIMEOUT_MS || env.LLM_TIMEOUT_MS || String(DEFAULT_CODEX_TIMEOUT_MS);
-  const parsed = parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_CODEX_TIMEOUT_MS;
+  return parsePositiveInteger(raw, DEFAULT_CODEX_TIMEOUT_MS);
+}
+
+export function resolveClaudeMaxTurns(kind = "reactive", env = process.env) {
+  if (kind === "self-loop") {
+    return parsePositiveInteger(env.ETWIN_CLAUDE_SELF_LOOP_MAX_TURNS, DEFAULT_CLAUDE_SELF_LOOP_MAX_TURNS);
+  }
+  return parsePositiveInteger(env.ETWIN_CLAUDE_REACTIVE_MAX_TURNS, DEFAULT_CLAUDE_REACTIVE_MAX_TURNS);
 }
 
 // SDK 0.2.117+ 砍掉了内置 cli.js，必须显式传 claude CLI 路径
@@ -334,9 +347,9 @@ export async function callClaudeSDK(userPrompt, opts = {}) {
       preset: "claude_code",
       append: buildSystemPrompt(),
     },
-    // self-loop 单 turn 决策；reactive 留够 tool 调用空间
-    // 全能版：diagnose+read+edit+test+commit+restart 的 self-healing 链至少 8-10，复合任务再加 recall/web 抓取就 12+
-    maxTurns: kind === "self-loop" ? 1 : 15,
+    // self-loop 单 turn 决策；reactive 留够 tool 调用空间。
+    // 长文件审读 / 跨机查记录 / self-healing 会连续用工具，15 turns 偶发不够。
+    maxTurns: resolveClaudeMaxTurns(kind),
     // SDK 子进程 stderr 转发到 etwin-bot stderr 方便排错
     stderr: (data) => process.stderr.write(`[SDK stderr] ${data}`),
   };
