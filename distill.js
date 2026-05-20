@@ -5,14 +5,16 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from "fs";
 import { join } from "path";
 import { callMiniCC, parseDecisionJSON } from "./llm.js";
+import { PROJECT_DIR, dataPath, ensureRuntimeDirs } from "./paths.js";
 
-const PROJECT_DIR = import.meta.dir;
-const CONV_HISTORY = join(PROJECT_DIR, "data/conversation-history.json");
-const LONG_TERM_MEM = join(PROJECT_DIR, "data/long-term-memory.json");
-const ARCHIVE_DIR = join(PROJECT_DIR, "data/archive");
-const SESSION_STORE = join(PROJECT_DIR, "data/session-ids.json");
+ensureRuntimeDirs();
+
+const CONV_HISTORY = dataPath("conversation-history.json");
+const LONG_TERM_MEM = dataPath("long-term-memory.json");
+const ARCHIVE_DIR = dataPath("archive");
+const SESSION_STORE = dataPath("session-ids.json");
 const DISTILL_PROMPT_PATH = join(PROJECT_DIR, "prompts/distill.md");
-const DISTILL_LOCK = join(PROJECT_DIR, "data/distill.lock");
+const DISTILL_LOCK = dataPath("distill.lock");
 
 // 当 conversation-history.length 达到此阈值，触发 distill
 const TRIGGER_THRESHOLD = parseInt(process.env.ETWIN_DISTILL_THRESHOLD || "60", 10);
