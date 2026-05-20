@@ -7,6 +7,7 @@ import {
   DEFAULT_CODEX_TIMEOUT_MS,
   resolveClaudeMaxTurns,
   resolveCodexReasoningEffort,
+  resolveCodexSandbox,
   resolveCodexServiceTier,
   resolveCodexTimeoutMs,
   shouldIgnoreCodexUserConfig,
@@ -65,12 +66,32 @@ describe("resolveCodexServiceTier", () => {
 });
 
 describe("shouldIgnoreCodexUserConfig", () => {
-  test("isolates Codex Twin from user config by default", () => {
-    expect(shouldIgnoreCodexUserConfig({})).toBe(true);
+  test("isolates Codex Twin chat mode from user config by default", () => {
+    expect(shouldIgnoreCodexUserConfig("chat", {})).toBe(true);
   });
 
-  test("allows explicit opt-out", () => {
-    expect(shouldIgnoreCodexUserConfig({ ETWIN_CODEX_IGNORE_USER_CONFIG: "false" })).toBe(false);
+  test("lets Codex Twin full mode inherit user config by default", () => {
+    expect(shouldIgnoreCodexUserConfig("full", {})).toBe(false);
+  });
+
+  test("allows explicit chat and full overrides", () => {
+    expect(shouldIgnoreCodexUserConfig("chat", { ETWIN_CODEX_CHAT_IGNORE_USER_CONFIG: "false" })).toBe(false);
+    expect(shouldIgnoreCodexUserConfig("full", { ETWIN_CODEX_FULL_IGNORE_USER_CONFIG: "true" })).toBe(true);
+  });
+});
+
+describe("resolveCodexSandbox", () => {
+  test("keeps chat mode read-only by default", () => {
+    expect(resolveCodexSandbox("chat", {})).toBe("read-only");
+  });
+
+  test("uses workspace-write for full mode by default", () => {
+    expect(resolveCodexSandbox("full", {})).toBe("workspace-write");
+  });
+
+  test("accepts explicit sandbox overrides", () => {
+    expect(resolveCodexSandbox("chat", { ETWIN_CODEX_CHAT_SANDBOX: "workspace-write" })).toBe("workspace-write");
+    expect(resolveCodexSandbox("full", { ETWIN_CODEX_FULL_SANDBOX: "danger-full-access" })).toBe("danger-full-access");
   });
 });
 

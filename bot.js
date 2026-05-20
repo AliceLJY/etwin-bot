@@ -11,6 +11,7 @@ import { gatherContext } from "./context.js";
 import { startSelfLoop, markAliceReaction } from "./self-loop.js";
 import { shouldDistill, runDistill } from "./distill.js";
 import { FILE_DIR, INSTANCE_ID, PROJECT_DIR, dataPath, ensureRuntimeDirs } from "./paths.js";
+import { resolveToolMode } from "./tool-mode.js";
 
 // 下载 TG 文件到本地（参考 telegram-ai-bridge bridge.js downloadFile）
 ensureRuntimeDirs();
@@ -273,8 +274,10 @@ async function handleMessage(ctx, userMsg, opts = {}) {
   // 更新 self-loop 的 alice_reaction
   markAliceReaction({ withinHours: 24 }, "engaged");
 
+  const toolModeRequest = resolveToolMode(userMsg);
+  const normalizedUserMsg = toolModeRequest.message || userMsg;
   const history = loadHistory();
-  history.push({ role: "user", content: userMsg, time: new Date().toISOString() });
+  history.push({ role: "user", content: normalizedUserMsg, time: new Date().toISOString() });
   let stopWaitingTyping = () => {};
 
   try {
@@ -284,11 +287,18 @@ async function handleMessage(ctx, userMsg, opts = {}) {
     const context = await gatherContext();
     const promptContext = { ...context };
     delete promptContext.recent_conversation;
+    promptContext.tool_mode = {
+      mode: toolModeRequest.mode,
+      source: toolModeRequest.source,
+      note: toolModeRequest.mode === "full"
+        ? "本轮是全工具模式：可以按需使用终端、文件、网络/MCP 工具。"
+        : "本轮是聊天模式：优先陪伴与轻量回答，不调用终端或 MCP 工具。",
+    };
     const template = readFileSync(REPLY_PROMPT_PATH, "utf-8");
     const recentHistory = history.slice(-20);
     const userPrompt = template
       .replace("{{context_json}}", JSON.stringify(promptContext, null, 2))
-      .replace("{{user_message}}", userMsg)
+      .replace("{{user_message}}", normalizedUserMsg)
       .replace("{{conversation_history}}", JSON.stringify(recentHistory, null, 2));
 
     if (DRY_RUN) {
@@ -298,7 +308,7 @@ async function handleMessage(ctx, userMsg, opts = {}) {
     }
 
     // 显式 kind="reactive" 避免和 self-loop 串台
-    const reply = await callMiniCC(userPrompt, { kind: "reactive", images: opts.images || [] });
+    const reply = await callMiniCC(userPrompt, { kind: "reactive", images: opts.images || [], toolMode: toolModeRequest.mode });
     stopWaitingTyping();
     history.push({ role: "assistant", content: reply, time: new Date().toISOString() });
     saveHistory(history);

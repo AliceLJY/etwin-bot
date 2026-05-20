@@ -7,6 +7,7 @@ import { join } from "path";
 import { homedir } from "os";
 import { spawn } from "child_process";
 import { DATA_DIR, PROJECT_DIR, dataPath, ensureRuntimeDirs } from "./paths.js";
+import { TOOL_MODE_CHAT, TOOL_MODE_FULL, normalizeToolMode } from "./tool-mode.js";
 
 ensureRuntimeDirs();
 
@@ -32,13 +33,25 @@ export function resolveCodexReasoningEffort(env = process.env) {
   return ["low", "medium", "high", "xhigh"].includes(value) ? value : DEFAULT_CODEX_REASONING_EFFORT;
 }
 
-export function shouldIgnoreCodexUserConfig(env = process.env) {
-  return env.ETWIN_CODEX_IGNORE_USER_CONFIG !== "false";
+export function shouldIgnoreCodexUserConfig(toolMode = TOOL_MODE_CHAT, env = process.env) {
+  const mode = normalizeToolMode(toolMode);
+  if (mode === TOOL_MODE_FULL) {
+    return env.ETWIN_CODEX_FULL_IGNORE_USER_CONFIG === "true";
+  }
+  return env.ETWIN_CODEX_CHAT_IGNORE_USER_CONFIG !== "false" && env.ETWIN_CODEX_IGNORE_USER_CONFIG !== "false";
 }
 
 export function resolveCodexServiceTier(env = process.env) {
   const value = (env.ETWIN_CODEX_SERVICE_TIER || env.CODEX_SERVICE_TIER || DEFAULT_CODEX_SERVICE_TIER).toLowerCase();
   return ["fast", "flex"].includes(value) ? value : "";
+}
+
+export function resolveCodexSandbox(toolMode = TOOL_MODE_CHAT, env = process.env) {
+  const mode = normalizeToolMode(toolMode);
+  const value = mode === TOOL_MODE_FULL
+    ? env.ETWIN_CODEX_FULL_SANDBOX || "workspace-write"
+    : env.ETWIN_CODEX_CHAT_SANDBOX || env.ETWIN_CODEX_SANDBOX || "read-only";
+  return ["read-only", "workspace-write", "danger-full-access"].includes(value) ? value : "read-only";
 }
 
 export function resolveClaudeMaxTurns(kind = "reactive", env = process.env) {
@@ -200,7 +213,7 @@ export function buildSystemPrompt() {
   return `${personaPrompt}${memorySection}${ETWIN_OPS_DISCIPLINE}`;
 }
 
-function codexPrompt(userPrompt, kind) {
+function codexPrompt(userPrompt, kind, toolMode) {
   return `${buildSystemPrompt()}
 
 ---
@@ -209,6 +222,7 @@ function codexPrompt(userPrompt, kind) {
 
 - backend: codex
 - kind: ${kind}
+- tool_mode: ${toolMode}
 
 ${userPrompt}
 
@@ -257,9 +271,10 @@ function spawnCodex(args, input, timeoutMs) {
 async function callCodexExec(userPrompt, opts = {}) {
   const dryRun = opts.dryRun || process.env.ETWIN_DRY_RUN === "true";
   const kind = opts.kind || "reactive";
+  const toolMode = normalizeToolMode(opts.toolMode || TOOL_MODE_CHAT);
 
   if (dryRun) {
-    console.log(`[codex dry-run kind=${kind}] prompt 长度:`, userPrompt.length);
+    console.log(`[codex dry-run kind=${kind} toolMode=${toolMode}] prompt 长度:`, userPrompt.length);
     return kind === "self-loop"
       ? JSON.stringify({ action: "silent", message: "", reasoning: "[dry-run mock] codex backend", next_check_hint: "4_hours" })
       : "[dry-run] 当前是 Codex dry-run 模式，未真调 LLM。";
@@ -268,7 +283,7 @@ async function callCodexExec(userPrompt, opts = {}) {
   mkdirSync(DATA_DIR, { recursive: true });
   const outputPath = dataPath(`codex-last-${kind}.txt`);
   const model = process.env.ETWIN_CODEX_MODEL || process.env.CODEX_MODEL || null;
-  const sandbox = process.env.ETWIN_CODEX_SANDBOX || "read-only";
+  const sandbox = resolveCodexSandbox(toolMode);
   const timeoutMs = resolveCodexTimeoutMs();
   const reasoningEffort = resolveCodexReasoningEffort();
   const serviceTier = resolveCodexServiceTier();
@@ -277,7 +292,7 @@ async function callCodexExec(userPrompt, opts = {}) {
   const args = [
     "exec",
   ];
-  if (shouldIgnoreCodexUserConfig()) {
+  if (shouldIgnoreCodexUserConfig(toolMode)) {
     args.push("--ignore-user-config");
   }
   args.push(
@@ -296,8 +311,8 @@ async function callCodexExec(userPrompt, opts = {}) {
   }
   args.push("-");
 
-  const prompt = codexPrompt(userPrompt, kind);
-  console.log(`[codex] exec kind=${kind} model=${model || "(default)"} effort=${reasoningEffort} tier=${serviceTier || "(default)"} ignore_user_config=${shouldIgnoreCodexUserConfig()}`);
+  const prompt = codexPrompt(userPrompt, kind, toolMode);
+  console.log(`[codex] exec kind=${kind} toolMode=${toolMode} model=${model || "(default)"} effort=${reasoningEffort} tier=${serviceTier || "(default)"} sandbox=${sandbox} ignore_user_config=${shouldIgnoreCodexUserConfig(toolMode)}`);
   const { stdout } = await spawnCodex(args, prompt, timeoutMs);
 
   if (existsSync(outputPath)) {
@@ -342,9 +357,10 @@ export async function callClaudeSDK(userPrompt, opts = {}) {
 
   const dryRun = opts.dryRun || process.env.ETWIN_DRY_RUN === "true";
   const kind = opts.kind || "reactive";
+  const toolMode = normalizeToolMode(opts.toolMode || TOOL_MODE_CHAT);
 
   if (dryRun) {
-    console.log(`[llm dry-run kind=${kind}] prompt 长度:`, userPrompt.length);
+    console.log(`[llm dry-run kind=${kind} toolMode=${toolMode}] prompt 长度:`, userPrompt.length);
     console.log("[llm dry-run] prompt 前 300 字:", userPrompt.slice(0, 300));
     if (kind === "self-loop") {
       return JSON.stringify({
@@ -358,6 +374,7 @@ export async function callClaudeSDK(userPrompt, opts = {}) {
   }
 
   const resumeId = opts.fresh ? null : loadSessionId(kind);
+  const useFullTools = toolMode === TOOL_MODE_FULL;
 
   const sdkOptions = {
     model: LLM_MODEL,
@@ -368,8 +385,8 @@ export async function callClaudeSDK(userPrompt, opts = {}) {
     // 屏蔽 user-scope settings 源避免 Alice CLAUDE.md 工程规则污染 E-Twin 人格
     // 副作用：user-scope MCP servers 也跟着没了 → 用下面 mcpServers / allowedTools 单独补回
     settingSources: [],
-    mcpServers: ETWIN_MCP_SERVERS,
-    allowedTools: ETWIN_ALLOWED_TOOLS,
+    mcpServers: useFullTools ? ETWIN_MCP_SERVERS : {},
+    allowedTools: useFullTools ? ETWIN_ALLOWED_TOOLS : [],
     systemPrompt: {
       type: "preset",
       preset: "claude_code",
@@ -381,6 +398,7 @@ export async function callClaudeSDK(userPrompt, opts = {}) {
     // SDK 子进程 stderr 转发到 etwin-bot stderr 方便排错
     stderr: (data) => process.stderr.write(`[SDK stderr] ${data}`),
   };
+  console.log(`[claude] query kind=${kind} toolMode=${toolMode} model=${LLM_MODEL} tools=${useFullTools ? "full" : "chat"}`);
 
   if (LLM_EFFORT) sdkOptions.effort = LLM_EFFORT;
   if (resumeId) sdkOptions.resume = resumeId;
