@@ -7,7 +7,7 @@ Alice 的 E-Twin —— 数字分身的**外向化镜像**。
 - **Agency 全交给 LLM**：bot 周期性醒来一次，LLM 自己看 context 自己决定 ping / silent
 - **没有硬编码的 frequency cap / quiet hours / daily limit**：LLM 看 action log + 互动率自己 calibrate
 - **唯一人格定义**：E 化的 Alice，爱和 I 化的 Alice 聊天
-- **后端走 mini CC**：通过 `ssh mini claude -p` 调 mini 端 Claude Code，复用订阅而非 API key
+- **后端可切换**：默认 CC 实例走 Claude Agent SDK；Codex 实例走 `codex exec`，复用订阅而非 API key
 - **TG 单一通道**：和 Hermes bots / telegram-ai-bridge 物理隔离（建议开独立 chat）
 
 ## 架构
@@ -31,7 +31,7 @@ Alice 的 E-Twin —— 数字分身的**外向化镜像**。
                          │
                          ▼
                   ┌──────────────┐
-                  │   llm.js     │ ssh mini claude -p → mini 端 CC
+                  │   llm.js     │ Claude SDK / codex exec
                   └──────────────┘
 ```
 
@@ -40,6 +40,7 @@ Alice 的 E-Twin —— 数字分身的**外向化镜像**。
 ```
 etwin-bot/
 ├── bot.js                    主入口：grammy + self-loop
+├── paths.js                  多实例 runtime 路径（data / files 分离）
 ├── self-loop.js              proactive 自驱：周期醒来→LLM 决策→执行
 ├── context.js                收集状态喂给 LLM
 ├── llm.js                    ssh mini claude -p 调用
@@ -56,6 +57,7 @@ etwin-bot/
 ├── package.json
 ├── start.sh                  dev 启动脚本
 ├── .env.example
+├── .env.codex.example        Codex 后端实例模板
 └── README.md
 ```
 
@@ -100,12 +102,37 @@ bash start.sh
 3. 极端情况发 `/quiet` 命令让 bot 暂停（LLM 看到 action log 里的 /quiet 会自觉冷静）
 4. **真的不喜欢就 `ETWIN_PROACTIVE=false` 切纯 reactive 模式**——bot 只回不主动
 
+## 多实例运行
+
+当前支持两种实例：
+
+- `com.etwin-bot`：原 CC 版，使用 `.env`，保留 proactive。
+- `com.etwin-codex-bot`：Codex 版，使用 `.env.codex`，第一版 `ETWIN_PROACTIVE=false`，只 reactive。
+
+Codex 版关键 env：
+
+```bash
+ETWIN_INSTANCE=codex
+ETWIN_PERSONA=codex
+ETWIN_LLM_BACKEND=codex
+ETWIN_REPLY_PROMPT=prompts/reply-codex.md
+ETWIN_DATA_DIR=data-codex
+ETWIN_FILE_DIR=files-codex
+ETWIN_PROACTIVE=false
+ETWIN_RUN_ON_START=false
+```
+
+启动 dev 实例：
+
+```bash
+ETWIN_ENV_FILE=.env.codex bash start.sh
+```
+
+launchd 模板见 `deploy/com.etwin-codex-bot.plist.template`。
+
 ## 部署位置
 
-PoC 阶段：MacBook 上跑（dev 模式）
-跑稳后：可以迁 mini 上 launchd 长期跑，或者保持在 MacBook（看你倾向）
-
-mini 端只负责跑 Claude Code（被 bot.js 通过 ssh 调用），不跑 bot 本身。
+PoC 阶段已迁到 Mac mini 上用 launchd 长期跑。
 
 ## 不做什么
 

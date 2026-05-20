@@ -2,12 +2,15 @@
 // 取代旧版的 spawn `claude -p` 子进程模式
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { readFileSync, writeFileSync, existsSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
+import { spawn } from "child_process";
+import { DATA_DIR, PROJECT_DIR, dataPath, ensureRuntimeDirs } from "./paths.js";
 
-const PROJECT_DIR = import.meta.dir;
-const SESSION_STORE = join(PROJECT_DIR, "data/session-ids.json");
+ensureRuntimeDirs();
+
+const SESSION_STORE = dataPath("session-ids.json");
 
 // SDK 0.2.117+ 砍掉了内置 cli.js，必须显式传 claude CLI 路径
 const CLAUDE_CLI_PATH =
@@ -15,6 +18,7 @@ const CLAUDE_CLI_PATH =
 
 const LLM_MODEL = process.env.ETWIN_LLM_MODEL || "claude-sonnet-4-6";
 const LLM_EFFORT = process.env.ETWIN_LLM_EFFORT || null; // 不指定走默认
+const LLM_BACKEND = process.env.ETWIN_LLM_BACKEND || process.env.ETWIN_LLM_MODE || "claude";
 
 // 让 etwin-bot 产生的 session 也能出现在终端 /resume 列表
 // 详见 telegram-ai-bridge/adapters/claude.js 同款 hack
@@ -126,13 +130,20 @@ const ETWIN_OPS_DISCIPLINE = `
 
 // 读 persona 三件套 + 追加 long-term-memory 拼成 system prompt append
 export function buildSystemPrompt() {
-  const base = readFileSync(join(PROJECT_DIR, "persona/digital-clone-base.md"), "utf-8");
-  const profile = readFileSync(join(PROJECT_DIR, "persona/digital-clone-profile.md"), "utf-8");
-  const tuning = readFileSync(join(PROJECT_DIR, "persona/e-tuning.md"), "utf-8");
+  const personaMode = process.env.ETWIN_PERSONA || (LLM_BACKEND === "codex" ? "codex" : "etwin");
+  let personaPrompt;
+  if (personaMode === "codex") {
+    personaPrompt = readFileSync(join(PROJECT_DIR, "persona/codex-tuning.md"), "utf-8");
+  } else {
+    const base = readFileSync(join(PROJECT_DIR, "persona/digital-clone-base.md"), "utf-8");
+    const profile = readFileSync(join(PROJECT_DIR, "persona/digital-clone-profile.md"), "utf-8");
+    const tuning = readFileSync(join(PROJECT_DIR, "persona/e-tuning.md"), "utf-8");
+    personaPrompt = `${base}\n\n---\n\n${profile}\n\n---\n\n${tuning}`;
+  }
 
   // long-term memory 注入（每次 distill 后自动累积）
   let memorySection = "";
-  const memPath = join(PROJECT_DIR, "data/long-term-memory.json");
+  const memPath = dataPath("long-term-memory.json");
   if (existsSync(memPath)) {
     try {
       const memory = JSON.parse(readFileSync(memPath, "utf-8"));
@@ -150,7 +161,97 @@ export function buildSystemPrompt() {
     } catch (_) {}
   }
 
-  return `${base}\n\n---\n\n${profile}\n\n---\n\n${tuning}${memorySection}${ETWIN_OPS_DISCIPLINE}`;
+  return `${personaPrompt}${memorySection}${ETWIN_OPS_DISCIPLINE}`;
+}
+
+function codexPrompt(userPrompt, kind) {
+  return `${buildSystemPrompt()}
+
+---
+
+# 当前 Telegram 回合
+
+- backend: codex
+- kind: ${kind}
+
+${userPrompt}
+
+---
+
+# 输出约束
+
+只输出要发给 Alice 的内容。不要解释你用了什么工具，不要写 markdown 标题，不要包 JSON。
+如果这是 reactive 聊天，用双换行分成 1-5 条自然 Telegram 消息。`;
+}
+
+function spawnCodex(args, input, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const child = spawn("codex", args, {
+      cwd: PROJECT_DIR,
+      env: process.env,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    let stderr = "";
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      reject(new Error(`codex exec timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
+    child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve({ stdout, stderr });
+      else reject(new Error(`codex exec exited ${code}: ${stderr.slice(-1200) || stdout.slice(-1200)}`));
+    });
+
+    child.stdin.write(input);
+    child.stdin.end();
+  });
+}
+
+async function callCodexExec(userPrompt, opts = {}) {
+  const dryRun = opts.dryRun || process.env.ETWIN_DRY_RUN === "true";
+  const kind = opts.kind || "reactive";
+
+  if (dryRun) {
+    console.log(`[codex dry-run kind=${kind}] prompt 长度:`, userPrompt.length);
+    return kind === "self-loop"
+      ? JSON.stringify({ action: "silent", message: "", reasoning: "[dry-run mock] codex backend", next_check_hint: "4_hours" })
+      : "[dry-run] 当前是 Codex dry-run 模式，未真调 LLM。";
+  }
+
+  mkdirSync(DATA_DIR, { recursive: true });
+  const outputPath = dataPath(`codex-last-${kind}.txt`);
+  const model = process.env.ETWIN_CODEX_MODEL || process.env.CODEX_MODEL || null;
+  const sandbox = process.env.ETWIN_CODEX_SANDBOX || "read-only";
+  const timeoutMs = parseInt(process.env.ETWIN_CODEX_TIMEOUT_MS || process.env.LLM_TIMEOUT_MS || "240000", 10);
+
+  const args = [
+    "exec",
+    "--cd", PROJECT_DIR,
+    "--sandbox", sandbox,
+    "--ignore-rules",
+    "-o", outputPath,
+  ];
+  if (model) args.push("--model", model);
+  args.push("-");
+
+  const prompt = codexPrompt(userPrompt, kind);
+  const { stdout } = await spawnCodex(args, prompt, timeoutMs);
+
+  if (existsSync(outputPath)) {
+    const output = readFileSync(outputPath, "utf-8").trim();
+    if (output) return output;
+  }
+
+  return stdout.trim();
 }
 
 // 持久化 session id：让 self-loop / reactive 各自维护一个 session 用于 resume
@@ -181,6 +282,10 @@ function saveSessionId(kind, sessionId) {
 // opts.fresh: 不 resume，强制新 session
 // 返回 string（assistant 输出的文本）
 export async function callClaudeSDK(userPrompt, opts = {}) {
+  if (LLM_BACKEND === "codex") {
+    return await callCodexExec(userPrompt, opts);
+  }
+
   const dryRun = opts.dryRun || process.env.ETWIN_DRY_RUN === "true";
   const kind = opts.kind || "reactive";
 

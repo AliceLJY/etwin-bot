@@ -4,16 +4,16 @@
 
 import { Bot, GrammyError } from "grammy";
 import { HttpsProxyAgent } from "https-proxy-agent";
-import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, renameSync } from "fs";
+import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, renameSync } from "fs";
 import { join } from "path";
 import { callMiniCC } from "./llm.js";
 import { gatherContext } from "./context.js";
 import { startSelfLoop, markAliceReaction } from "./self-loop.js";
 import { shouldDistill, runDistill } from "./distill.js";
+import { FILE_DIR, INSTANCE_ID, PROJECT_DIR, dataPath, ensureRuntimeDirs } from "./paths.js";
 
 // 下载 TG 文件到本地（参考 telegram-ai-bridge bridge.js downloadFile）
-const FILE_DIR = join(import.meta.dir, "files");
-mkdirSync(FILE_DIR, { recursive: true });
+ensureRuntimeDirs();
 
 // 启动时清理 30+ 天前的旧文件
 (function cleanupOldFiles() {
@@ -49,14 +49,17 @@ async function downloadTGFile(ctx, fileId, filename) {
   return localPath;
 }
 
-const PROJECT_DIR = import.meta.dir;
-const REPLY_PROMPT_PATH = join(PROJECT_DIR, "prompts/reply.md");
-const CONV_HISTORY_PATH = join(PROJECT_DIR, "data/conversation-history.json");
+const DEFAULT_REPLY_PROMPT =
+  process.env.ETWIN_PERSONA === "codex" ? "prompts/reply-codex.md" : "prompts/reply.md";
+const REPLY_PROMPT_PATH = join(PROJECT_DIR, process.env.ETWIN_REPLY_PROMPT || DEFAULT_REPLY_PROMPT);
+const CONV_HISTORY_PATH = dataPath("conversation-history.json");
 
 const TG_BOT_TOKEN = process.env.TG_BOT_TOKEN;
 const ALICE_CHAT_ID = process.env.ALICE_CHAT_ID;
 const DRY_RUN = process.env.ETWIN_DRY_RUN === "true";
 const PROACTIVE_ENABLED = process.env.ETWIN_PROACTIVE !== "false";
+const RUN_ON_START = process.env.ETWIN_RUN_ON_START !== "false";
+const BOT_DISPLAY_NAME = process.env.ETWIN_DISPLAY_NAME || (INSTANCE_ID === "codex" ? "Codex Twin" : "E-Twin");
 
 // 段间延迟参数：模拟真人打字节奏
 const TYPING_MS_PER_CHAR = parseInt(process.env.ETWIN_TYPING_MS_PER_CHAR || "40", 10);
@@ -114,8 +117,8 @@ const bot = new Bot(TG_BOT_TOKEN);
 // /start 命令：让 bot 报自己 chat ID 方便配置
 bot.command("start", async (ctx) => {
   await ctx.reply(
-    `你好，I 化的你。我是 E-Twin。\n\n` +
-    `Chat ID: \`${ctx.chat.id}\` — 把这个填到 .env 的 ALICE_CHAT_ID。\n` +
+    `你好，我是 ${BOT_DISPLAY_NAME}。\n\n` +
+    `Chat ID: \`${ctx.chat.id}\` — 把这个填到当前 env 的 ALICE_CHAT_ID。\n` +
     `配完重启 bot，我就能找你聊天了。`,
     { parse_mode: "Markdown" },
   );
@@ -176,7 +179,7 @@ bot.on("message:voice", async (ctx) => {
 
 // Sticker handler：Alice 发 sticker → bot 抓 file_id 存到 sticker 库
 // Phase 1: 只存不发回——攒到 30-50 个后再做 LLM 选 sticker 那一层
-const STICKER_LIB = join(import.meta.dir, "data/sticker-library.json");
+const STICKER_LIB = dataPath("sticker-library.json");
 function loadStickerLib() {
   if (!existsSync(STICKER_LIB)) return [];
   try { return JSON.parse(readFileSync(STICKER_LIB, "utf-8")); } catch (_) { return []; }
@@ -260,7 +263,7 @@ async function handleMessage(ctx, userMsg) {
   } catch (e) {
     console.error("[bot] reply 失败:", e.message);
     try {
-      await ctx.reply(`唉，我那边出了点问题：${e.message.slice(0, 200)}\n（这条不算 E-Twin 的话，是 plumbing error）`);
+      await ctx.reply(`唉，我那边出了点问题：${e.message.slice(0, 200)}\n（这条不算 ${BOT_DISPLAY_NAME} 的话，是 plumbing error）`);
     } catch (_) {}
   }
 }
@@ -287,8 +290,11 @@ bot.catch((err) => {
 // 启动
 async function main() {
   console.log("=== etwin-bot 启动 ===");
+  console.log(`INSTANCE=${INSTANCE_ID}`);
+  console.log(`DISPLAY=${BOT_DISPLAY_NAME}`);
   console.log(`DRY_RUN=${DRY_RUN}`);
   console.log(`PROACTIVE_ENABLED=${PROACTIVE_ENABLED}`);
+  console.log(`RUN_ON_START=${RUN_ON_START}`);
   console.log(`ALICE_CHAT_ID=${ALICE_CHAT_ID || "(未配置)"}`);
 
   // 启动 self-loop（如果开启 + 已配置 chat ID）
@@ -299,6 +305,7 @@ async function main() {
         await sendAsMulti({ bot, chatId: ALICE_CHAT_ID, text });
       },
       dryRun: DRY_RUN,
+      runOnStart: RUN_ON_START,
     });
   } else if (!PROACTIVE_ENABLED) {
     console.log("[main] ETWIN_PROACTIVE=false，self-loop 不启动（纯 reactive 模式）");

@@ -4,11 +4,14 @@ import { readFileSync, statSync, existsSync, readdirSync } from "fs";
 import { join } from "path";
 import { execFileSync } from "child_process";
 import { homedir } from "os";
+import { dataPath, ensureRuntimeDirs } from "./paths.js";
 
-const PROJECT_DIR = import.meta.dir;
-const ACTION_LOG = join(PROJECT_DIR, "data/action-log.json");
-const CONV_HISTORY = join(PROJECT_DIR, "data/conversation-history.json");
+ensureRuntimeDirs();
+
+const ACTION_LOG = dataPath("action-log.json");
+const CONV_HISTORY = dataPath("conversation-history.json");
 const HOME = homedir();
+const RECALL_SCOPE = process.env.ETWIN_RECALL_SCOPE || "etwin:alice";
 
 // 读最近 N 轮对话历史（让 self-loop LLM 能看到 Alice 最近说的话，识别 pause signal）
 function loadRecentConversation(n = 10) {
@@ -115,7 +118,7 @@ async function fetchLatestCheckpoint() {
       "ssh",
       [
         sshHost,
-        "cd ~/recallnest && /Users/anxianjingya/.bun/bin/bun run src/cli.ts latest-checkpoint --scope etwin:alice --json 2>/dev/null || echo {}",
+        `cd ~/recallnest && /Users/anxianjingya/.bun/bin/bun run src/cli.ts latest-checkpoint --scope ${JSON.stringify(RECALL_SCOPE)} --json 2>/dev/null || echo {}`,
       ],
       {
         encoding: "utf-8",

@@ -5,10 +5,12 @@ import { readFileSync, writeFileSync, existsSync } from "fs";
 import { join } from "path";
 import { gatherContext, loadActionLog, recentActions, interactionStats } from "./context.js";
 import { callMiniCC, parseDecisionJSON } from "./llm.js";
+import { PROJECT_DIR, dataPath, ensureRuntimeDirs } from "./paths.js";
 
-const PROJECT_DIR = import.meta.dir;
-const ACTION_LOG = join(PROJECT_DIR, "data/action-log.json");
-const SELF_DECISION_PROMPT_PATH = join(PROJECT_DIR, "prompts/self-decision.md");
+ensureRuntimeDirs();
+
+const ACTION_LOG = dataPath("action-log.json");
+const SELF_DECISION_PROMPT_PATH = join(PROJECT_DIR, process.env.ETWIN_SELF_PROMPT || "prompts/self-decision.md");
 
 // 唤醒间隔（仅是检查间隔，不是发送间隔——LLM 决定真发）
 const WAKE_INTERVAL_MS = parseInt(process.env.ETWIN_WAKE_INTERVAL_MS || String(30 * 60 * 1000), 10);
