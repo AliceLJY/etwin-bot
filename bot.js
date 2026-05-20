@@ -66,6 +66,7 @@ const BOT_DISPLAY_NAME = process.env.ETWIN_DISPLAY_NAME || (INSTANCE_ID === "cod
 const TYPING_MS_PER_CHAR = parseInt(process.env.ETWIN_TYPING_MS_PER_CHAR || "40", 10);
 const TYPING_MAX_MS = parseInt(process.env.ETWIN_TYPING_MAX_MS || "3500", 10);
 const TYPING_JITTER_MS = parseInt(process.env.ETWIN_TYPING_JITTER_MS || "800", 10);
+const TYPING_KEEPALIVE_MS = parseInt(process.env.ETWIN_TYPING_KEEPALIVE_MS || "4500", 10);
 
 // 把 LLM 输出按双换行切成多条 TG 消息
 function splitMessages(text) {
@@ -92,6 +93,15 @@ async function sendAsMulti({ bot, chatId, text }) {
     await new Promise((r) => setTimeout(r, 250 + Math.random() * 400));
     await bot.api.sendMessage(chatId, segments[i]);
   }
+}
+
+function startTypingKeepalive(ctx) {
+  if (!Number.isFinite(TYPING_KEEPALIVE_MS) || TYPING_KEEPALIVE_MS <= 0) return () => {};
+  const timer = setInterval(() => {
+    ctx.replyWithChatAction("typing").catch(() => {});
+  }, TYPING_KEEPALIVE_MS);
+  if (typeof timer.unref === "function") timer.unref();
+  return () => clearInterval(timer);
 }
 
 if (!TG_BOT_TOKEN) {
@@ -265,25 +275,31 @@ async function handleMessage(ctx, userMsg, opts = {}) {
 
   const history = loadHistory();
   history.push({ role: "user", content: userMsg, time: new Date().toISOString() });
+  let stopWaitingTyping = () => {};
 
   try {
     await ctx.replyWithChatAction("typing");
+    stopWaitingTyping = startTypingKeepalive(ctx);
 
     const context = await gatherContext();
+    const promptContext = { ...context };
+    delete promptContext.recent_conversation;
     const template = readFileSync(REPLY_PROMPT_PATH, "utf-8");
     const recentHistory = history.slice(-20);
     const userPrompt = template
-      .replace("{{context_json}}", JSON.stringify(context, null, 2))
+      .replace("{{context_json}}", JSON.stringify(promptContext, null, 2))
       .replace("{{user_message}}", userMsg)
       .replace("{{conversation_history}}", JSON.stringify(recentHistory, null, 2));
 
     if (DRY_RUN) {
+      stopWaitingTyping();
       await ctx.reply("[dry-run] 当前是 dry-run 模式，未真调 LLM。");
       return;
     }
 
     // 显式 kind="reactive" 避免和 self-loop 串台
     const reply = await callMiniCC(userPrompt, { kind: "reactive", images: opts.images || [] });
+    stopWaitingTyping();
     history.push({ role: "assistant", content: reply, time: new Date().toISOString() });
     saveHistory(history);
 
@@ -299,6 +315,7 @@ async function handleMessage(ctx, userMsg, opts = {}) {
       }).catch((e) => console.error("[bot] distill 失败:", e.message));
     }
   } catch (e) {
+    stopWaitingTyping();
     console.error("[bot] reply 失败:", e.message);
     try {
       await ctx.reply(`唉，我那边出了点问题：${e.message.slice(0, 200)}\n（这条不算 ${BOT_DISPLAY_NAME} 的话，是 plumbing error）`);
