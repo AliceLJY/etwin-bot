@@ -232,6 +232,7 @@ async function callCodexExec(userPrompt, opts = {}) {
   const model = process.env.ETWIN_CODEX_MODEL || process.env.CODEX_MODEL || null;
   const sandbox = process.env.ETWIN_CODEX_SANDBOX || "read-only";
   const timeoutMs = parseInt(process.env.ETWIN_CODEX_TIMEOUT_MS || process.env.LLM_TIMEOUT_MS || "240000", 10);
+  const images = (opts.images || []).filter((imagePath) => imagePath && existsSync(imagePath));
 
   const args = [
     "exec",
@@ -241,6 +242,9 @@ async function callCodexExec(userPrompt, opts = {}) {
     "-o", outputPath,
   ];
   if (model) args.push("--model", model);
+  for (const imagePath of images) {
+    args.push("--image", imagePath);
+  }
   args.push("-");
 
   const prompt = codexPrompt(userPrompt, kind);

@@ -53,6 +53,7 @@ const DEFAULT_REPLY_PROMPT =
   process.env.ETWIN_PERSONA === "codex" ? "prompts/reply-codex.md" : "prompts/reply.md";
 const REPLY_PROMPT_PATH = join(PROJECT_DIR, process.env.ETWIN_REPLY_PROMPT || DEFAULT_REPLY_PROMPT);
 const CONV_HISTORY_PATH = dataPath("conversation-history.json");
+const PENDING_MEDIA_PATH = dataPath("pending-media.json");
 
 const TG_BOT_TOKEN = process.env.TG_BOT_TOKEN;
 const ALICE_CHAT_ID = process.env.ALICE_CHAT_ID;
@@ -112,6 +113,37 @@ function saveHistory(history) {
   writeFileSync(CONV_HISTORY_PATH, JSON.stringify(trimmed, null, 2));
 }
 
+function loadPendingMedia() {
+  if (!existsSync(PENDING_MEDIA_PATH)) return {};
+  try { return JSON.parse(readFileSync(PENDING_MEDIA_PATH, "utf-8")); } catch (_) { return {}; }
+}
+
+function savePendingMedia(data) {
+  writeFileSync(PENDING_MEDIA_PATH, JSON.stringify(data, null, 2));
+}
+
+function stashPendingImage(chatId, imagePath) {
+  const data = loadPendingMedia();
+  const key = String(chatId);
+  const cutoff = Date.now() - 10 * 60 * 1000;
+  const current = (data[key] || []).filter((m) => new Date(m.time).getTime() > cutoff);
+  current.push({ type: "image", path: imagePath, time: new Date().toISOString() });
+  data[key] = current.slice(-5);
+  savePendingMedia(data);
+}
+
+function consumePendingImages(chatId) {
+  const data = loadPendingMedia();
+  const key = String(chatId);
+  const cutoff = Date.now() - 10 * 60 * 1000;
+  const images = (data[key] || [])
+    .filter((m) => m.type === "image" && new Date(m.time).getTime() > cutoff)
+    .map((m) => m.path);
+  delete data[key];
+  savePendingMedia(data);
+  return images;
+}
+
 const bot = new Bot(TG_BOT_TOKEN);
 
 // /start 命令：让 bot 报自己 chat ID 方便配置
@@ -132,16 +164,21 @@ bot.command("quiet", async (ctx) => {
   console.log(`[bot] /quiet from chat ${ctx.chat.id}`);
 });
 
-// 图片：下载到本地 + prompt 里塞绝对路径让 LLM 自己 Read 看
+// 图片：下载到本地；有 caption 立即处理，无 caption 等 Alice 下一条文字一起看
 bot.on("message:photo", async (ctx) => {
   if (ALICE_CHAT_ID && String(ctx.chat.id) !== String(ALICE_CHAT_ID)) return;
   const photo = ctx.message.photo;
   const largest = photo[photo.length - 1];
-  const caption = ctx.message.caption || "看看这张图";
+  const caption = ctx.message.caption?.trim() || "";
   try {
     const localPath = await downloadTGFile(ctx, largest.file_id, "photo.jpg");
     console.log(`[bot] Alice → bot: [photo] ${localPath}`);
-    await handleMessage(ctx, `${caption}\n\n[图片文件: ${localPath}]`);
+    if (!caption) {
+      stashPendingImage(ctx.chat.id, localPath);
+      await ctx.reply("图我收到了，你补一句问题我一起看。");
+      return;
+    }
+    await handleMessage(ctx, `${caption}\n\n[图片文件: ${localPath}]`, { images: [localPath] });
   } catch (e) {
     await ctx.reply(`图片下载失败: ${e.message}`);
   }
@@ -159,7 +196,8 @@ bot.on("message:document", async (ctx) => {
   try {
     const localPath = await downloadTGFile(ctx, doc.file_id, doc.file_name || "file");
     console.log(`[bot] Alice → bot: [document] ${localPath}`);
-    await handleMessage(ctx, `${caption}\n\n[文件: ${localPath}]`);
+    const images = doc.mime_type?.startsWith("image/") ? [localPath] : [];
+    await handleMessage(ctx, `${caption}\n\n[文件: ${localPath}]`, { images });
   } catch (e) {
     await ctx.reply(`文件下载失败: ${e.message}`);
   }
@@ -221,7 +259,7 @@ bot.on("message:sticker", async (ctx) => {
 });
 
 // 统一处理（reply.md 路径），text/photo/document/voice 都走这里
-async function handleMessage(ctx, userMsg) {
+async function handleMessage(ctx, userMsg, opts = {}) {
   // 更新 self-loop 的 alice_reaction
   markAliceReaction({ withinHours: 24 }, "engaged");
 
@@ -245,7 +283,7 @@ async function handleMessage(ctx, userMsg) {
     }
 
     // 显式 kind="reactive" 避免和 self-loop 串台
-    const reply = await callMiniCC(userPrompt, { kind: "reactive" });
+    const reply = await callMiniCC(userPrompt, { kind: "reactive", images: opts.images || [] });
     history.push({ role: "assistant", content: reply, time: new Date().toISOString() });
     saveHistory(history);
 
@@ -276,7 +314,11 @@ bot.on("message:text", async (ctx) => {
     return;
   }
 
-  await handleMessage(ctx, ctx.message.text);
+  const pendingImages = consumePendingImages(ctx.chat.id);
+  const userMsg = pendingImages.length > 0
+    ? `${ctx.message.text}\n\n[上条图片文件: ${pendingImages.join("\n")}]`
+    : ctx.message.text;
+  await handleMessage(ctx, userMsg, { images: pendingImages });
 });
 
 bot.catch((err) => {
