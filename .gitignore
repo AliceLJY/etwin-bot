@@ -4,6 +4,7 @@
 node_modules/
 data/action-log.json
 data/conversation-history.json
+data/pending-media.json
 data/session-ids.json
 data/sticker-library.json
 *.log
