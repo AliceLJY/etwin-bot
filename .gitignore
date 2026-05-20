@@ -4,3 +4,9 @@ data/action-log.json
 data/conversation-history.json
 *.log
 .DS_Store
+
+# Runtime data (mini 端跑 bot 时生成，不入仓)
+data/archive/
+data/long-term-memory.json
+files/
+.playwright-mcp/
