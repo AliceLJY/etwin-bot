@@ -1,12 +1,18 @@
-.env
+.env*
+!.env.example
+!.env.*.example
 node_modules/
 data/action-log.json
 data/conversation-history.json
+data/session-ids.json
+data/sticker-library.json
 *.log
 .DS_Store
 
 # Runtime data (mini 端跑 bot 时生成，不入仓)
 data/archive/
 data/long-term-memory.json
+data-codex/
 files/
+files-*/
 .playwright-mcp/

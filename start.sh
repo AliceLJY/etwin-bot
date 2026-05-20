@@ -6,13 +6,14 @@ set -e
 
 cd "$(dirname "$0")"
 
-# 加载 .env
-if [ -f .env ]; then
+# 加载 env（默认 .env，可用 ETWIN_ENV_FILE=.env.codex 启动第二实例）
+ENV_FILE="${ETWIN_ENV_FILE:-.env}"
+if [ -f "$ENV_FILE" ]; then
   set -a
-  source .env
+  source "$ENV_FILE"
   set +a
 else
-  echo "❌ 缺 .env，复制 .env.example 改名为 .env 并填值"
+  echo "❌ 缺 $ENV_FILE，复制 .env.example 改名后填值"
   exit 1
 fi
 
@@ -23,5 +24,5 @@ if [ ! -d node_modules ]; then
 fi
 
 # 启动
-echo "🚀 etwin-bot 启动 (DRY_RUN=$ETWIN_DRY_RUN, PROACTIVE=$ETWIN_PROACTIVE)"
+echo "🚀 etwin-bot 启动 (ENV_FILE=$ENV_FILE, INSTANCE=$ETWIN_INSTANCE, BACKEND=$ETWIN_LLM_BACKEND, DRY_RUN=$ETWIN_DRY_RUN, PROACTIVE=$ETWIN_PROACTIVE)"
 exec bun run bot.js
