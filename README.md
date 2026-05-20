@@ -108,6 +108,7 @@ bash start.sh
 
 - `com.etwin-bot`：原 CC 版，使用 `.env`，保留 proactive。
 - `com.etwin-codex-bot`：Codex 版，使用 `.env.codex`，第一版 `ETWIN_PROACTIVE=false`，只 reactive。
+- Codex 版收到 TG 图片时会先存入 `files-codex/`，再通过 `codex exec --image <path>` 传给后端；无 caption 的图片会暂存到下一条文字一起处理。
 
 Codex 版关键 env：
 
