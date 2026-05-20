@@ -11,6 +11,13 @@ import { DATA_DIR, PROJECT_DIR, dataPath, ensureRuntimeDirs } from "./paths.js";
 ensureRuntimeDirs();
 
 const SESSION_STORE = dataPath("session-ids.json");
+export const DEFAULT_CODEX_TIMEOUT_MS = 600000;
+
+export function resolveCodexTimeoutMs(env = process.env) {
+  const raw = env.ETWIN_CODEX_TIMEOUT_MS || env.LLM_TIMEOUT_MS || String(DEFAULT_CODEX_TIMEOUT_MS);
+  const parsed = parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_CODEX_TIMEOUT_MS;
+}
 
 // SDK 0.2.117+ 砍掉了内置 cli.js，必须显式传 claude CLI 路径
 const CLAUDE_CLI_PATH =
@@ -186,6 +193,7 @@ ${userPrompt}
 
 function spawnCodex(args, input, timeoutMs) {
   return new Promise((resolve, reject) => {
+    const startedAt = Date.now();
     const child = spawn("codex", args, {
       cwd: PROJECT_DIR,
       env: process.env,
@@ -196,7 +204,7 @@ function spawnCodex(args, input, timeoutMs) {
     let stderr = "";
     const timer = setTimeout(() => {
       child.kill("SIGTERM");
-      reject(new Error(`codex exec timed out after ${timeoutMs}ms`));
+      reject(new Error(`codex exec timed out after ${timeoutMs}ms (elapsed=${Date.now() - startedAt}ms)`));
     }, timeoutMs);
 
     child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
@@ -207,8 +215,9 @@ function spawnCodex(args, input, timeoutMs) {
     });
     child.on("close", (code) => {
       clearTimeout(timer);
+      const elapsed = Date.now() - startedAt;
       if (code === 0) resolve({ stdout, stderr });
-      else reject(new Error(`codex exec exited ${code}: ${stderr.slice(-1200) || stdout.slice(-1200)}`));
+      else reject(new Error(`codex exec exited ${code} after ${elapsed}ms: ${stderr.slice(-1200) || stdout.slice(-1200)}`));
     });
 
     child.stdin.write(input);
@@ -231,7 +240,7 @@ async function callCodexExec(userPrompt, opts = {}) {
   const outputPath = dataPath(`codex-last-${kind}.txt`);
   const model = process.env.ETWIN_CODEX_MODEL || process.env.CODEX_MODEL || null;
   const sandbox = process.env.ETWIN_CODEX_SANDBOX || "read-only";
-  const timeoutMs = parseInt(process.env.ETWIN_CODEX_TIMEOUT_MS || process.env.LLM_TIMEOUT_MS || "240000", 10);
+  const timeoutMs = resolveCodexTimeoutMs();
   const images = (opts.images || []).filter((imagePath) => imagePath && existsSync(imagePath));
 
   const args = [
