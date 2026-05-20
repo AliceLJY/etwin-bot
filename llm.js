@@ -12,6 +12,8 @@ ensureRuntimeDirs();
 
 const SESSION_STORE = dataPath("session-ids.json");
 export const DEFAULT_CODEX_TIMEOUT_MS = 600000;
+export const DEFAULT_CODEX_REASONING_EFFORT = "xhigh";
+export const DEFAULT_CODEX_SERVICE_TIER = "fast";
 export const DEFAULT_CLAUDE_SELF_LOOP_MAX_TURNS = 1;
 export const DEFAULT_CLAUDE_REACTIVE_MAX_TURNS = 30;
 
@@ -23,6 +25,20 @@ function parsePositiveInteger(value, fallback) {
 export function resolveCodexTimeoutMs(env = process.env) {
   const raw = env.ETWIN_CODEX_TIMEOUT_MS || env.LLM_TIMEOUT_MS || String(DEFAULT_CODEX_TIMEOUT_MS);
   return parsePositiveInteger(raw, DEFAULT_CODEX_TIMEOUT_MS);
+}
+
+export function resolveCodexReasoningEffort(env = process.env) {
+  const value = (env.ETWIN_CODEX_REASONING_EFFORT || DEFAULT_CODEX_REASONING_EFFORT).toLowerCase();
+  return ["low", "medium", "high", "xhigh"].includes(value) ? value : DEFAULT_CODEX_REASONING_EFFORT;
+}
+
+export function shouldIgnoreCodexUserConfig(env = process.env) {
+  return env.ETWIN_CODEX_IGNORE_USER_CONFIG !== "false";
+}
+
+export function resolveCodexServiceTier(env = process.env) {
+  const value = (env.ETWIN_CODEX_SERVICE_TIER || env.CODEX_SERVICE_TIER || DEFAULT_CODEX_SERVICE_TIER).toLowerCase();
+  return ["fast", "flex"].includes(value) ? value : "";
 }
 
 export function resolveClaudeMaxTurns(kind = "reactive", env = process.env) {
@@ -254,15 +270,26 @@ async function callCodexExec(userPrompt, opts = {}) {
   const model = process.env.ETWIN_CODEX_MODEL || process.env.CODEX_MODEL || null;
   const sandbox = process.env.ETWIN_CODEX_SANDBOX || "read-only";
   const timeoutMs = resolveCodexTimeoutMs();
+  const reasoningEffort = resolveCodexReasoningEffort();
+  const serviceTier = resolveCodexServiceTier();
   const images = (opts.images || []).filter((imagePath) => imagePath && existsSync(imagePath));
 
   const args = [
     "exec",
+  ];
+  if (shouldIgnoreCodexUserConfig()) {
+    args.push("--ignore-user-config");
+  }
+  args.push(
     "--cd", PROJECT_DIR,
     "--sandbox", sandbox,
     "--ignore-rules",
+    "-c", `model_reasoning_effort="${reasoningEffort}"`,
     "-o", outputPath,
-  ];
+  );
+  if (serviceTier) {
+    args.push("-c", `service_tier="${serviceTier}"`);
+  }
   if (model) args.push("--model", model);
   for (const imagePath of images) {
     args.push("--image", imagePath);
@@ -270,6 +297,7 @@ async function callCodexExec(userPrompt, opts = {}) {
   args.push("-");
 
   const prompt = codexPrompt(userPrompt, kind);
+  console.log(`[codex] exec kind=${kind} model=${model || "(default)"} effort=${reasoningEffort} tier=${serviceTier || "(default)"} ignore_user_config=${shouldIgnoreCodexUserConfig()}`);
   const { stdout } = await spawnCodex(args, prompt, timeoutMs);
 
   if (existsSync(outputPath)) {
