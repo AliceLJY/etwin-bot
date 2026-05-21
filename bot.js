@@ -2,17 +2,18 @@
 // bot.js — etwin-bot 主入口
 // grammy reactive 对话 + self-loop proactive 自驱
 
-import { Bot, GrammyError, InputFile } from "grammy";
+import { Bot, GrammyError } from "grammy";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, renameSync } from "fs";
 import { join } from "path";
+import { spawn } from "child_process";
 import { callMiniCC } from "./llm.js";
 import { generateTelegramImage } from "./image-generation.js";
 import { gatherContext } from "./context.js";
 import { startSelfLoop, markAliceReaction } from "./self-loop.js";
 import { shouldDistill, runDistill } from "./distill.js";
 import { FILE_DIR, INSTANCE_ID, PROJECT_DIR, dataPath, ensureRuntimeDirs } from "./paths.js";
-import { isImageGenerationRequest, resolveToolMode } from "./tool-mode.js";
+import { isImageFollowupRequest, isImageGenerationRequest, resolveToolMode } from "./tool-mode.js";
 
 // 下载 TG 文件到本地（参考 telegram-ai-bridge bridge.js downloadFile）
 ensureRuntimeDirs();
@@ -105,6 +106,48 @@ async function sendAsMulti({ bot, chatId, text }) {
   }
 }
 
+function sendPhotoViaCurl(chatId, imagePath) {
+  return new Promise((resolve, reject) => {
+    const PROXY = process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy;
+    const args = ["-sS", "--fail-with-body"];
+    if (PROXY) args.push("-x", PROXY);
+    args.push(
+      "-F", `chat_id=${chatId}`,
+      "-F", `photo=@${imagePath}`,
+      "--config", "-",
+    );
+
+    const child = spawn("curl", args, {
+      cwd: PROJECT_DIR,
+      env: process.env,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
+    child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code !== 0) {
+        reject(new Error(`telegram sendPhoto failed with curl exit ${code}: ${stderr.slice(-800) || stdout.slice(-800)}`));
+        return;
+      }
+      try {
+        const result = JSON.parse(stdout);
+        if (!result.ok) {
+          reject(new Error(`telegram sendPhoto API failed: ${stdout.slice(0, 800)}`));
+          return;
+        }
+        resolve(result.result);
+      } catch (err) {
+        reject(new Error(`telegram sendPhoto returned non-JSON: ${stdout.slice(0, 800) || err.message}`));
+      }
+    });
+    child.stdin.end(`url = "https://api.telegram.org/bot${TG_BOT_TOKEN}/sendPhoto"\n`);
+  });
+}
+
 function startTypingKeepalive(ctx) {
   if (!Number.isFinite(TYPING_KEEPALIVE_MS) || TYPING_KEEPALIVE_MS <= 0) return () => {};
   const timer = setInterval(() => {
@@ -149,6 +192,46 @@ function saveHistory(history) {
   // 留最近 30 轮
   const trimmed = history.slice(-60);
   writeFileSync(CONV_HISTORY_PATH, JSON.stringify(trimmed, null, 2));
+}
+
+function hasRecentImageGenerationContext(history) {
+  return history.slice(-10).some((item) => {
+    const content = String(item.content || "");
+    return content.includes("[生成图片:") || isImageGenerationRequest(content);
+  });
+}
+
+function composeImageRequest(message, history) {
+  const current = String(message || "");
+  if (isImageGenerationRequest(current)) return current;
+
+  let contextStart = -1;
+  for (let i = history.length - 1; i >= 0; i--) {
+    const content = String(history[i].content || "");
+    if (isImageGenerationRequest(content) || content.includes("[生成图片:")) {
+      contextStart = i;
+      break;
+    }
+  }
+  if (contextStart === -1) return current;
+
+  const imageContext = history.slice(Math.max(0, contextStart - 4), history.length)
+    .map((item) => `${item.role}: ${item.content}`)
+    .join("\n");
+
+  return `${imageContext}\n\n当前修改/追问：${current}`;
+}
+
+function hasCompletedSameImageRequest(message, history) {
+  const current = String(message || "");
+  for (let i = history.length - 1; i >= 0; i--) {
+    const item = history[i];
+    if (item.role !== "user" || String(item.content || "") !== current) continue;
+    return history.slice(i + 1).some((later) => (
+      later.role === "assistant" && String(later.content || "").includes("[生成图片:")
+    ));
+  }
+  return false;
 }
 
 function loadPendingMedia() {
@@ -303,25 +386,39 @@ async function handleMessage(ctx, userMsg, opts = {}) {
 
   const toolModeRequest = resolveToolMode(userMsg);
   const normalizedUserMsg = toolModeRequest.message || userMsg;
-  const history = loadHistory();
+  const priorHistory = loadHistory();
+  const history = [...priorHistory];
   history.push({ role: "user", content: normalizedUserMsg, time: new Date().toISOString() });
   let stopWaitingTyping = () => {};
   let stopStallNotice = () => {};
 
   try {
-    if ((opts.images || []).length === 0 && isImageGenerationRequest(normalizedUserMsg)) {
+    const shouldGenerateImage = (opts.images || []).length === 0 && (
+      isImageGenerationRequest(normalizedUserMsg) ||
+      (hasRecentImageGenerationContext(priorHistory) && isImageFollowupRequest(normalizedUserMsg))
+    );
+
+    console.log(`[bot] route text="${normalizedUserMsg.slice(0, 80)}" toolMode=${toolModeRequest.mode} source=${toolModeRequest.source} image=${shouldGenerateImage}`);
+
+    if (shouldGenerateImage) {
+      if (hasCompletedSameImageRequest(normalizedUserMsg, priorHistory)) {
+        console.log(`[bot] duplicate image request already completed, ack only text="${normalizedUserMsg.slice(0, 80)}"`);
+        saveHistory(history);
+        return;
+      }
+
       await ctx.replyWithChatAction("upload_photo");
       stopWaitingTyping = startUploadPhotoKeepalive(ctx);
       stopStallNotice = startStallNotice(ctx);
 
-      const image = await generateTelegramImage(normalizedUserMsg);
+      const image = await generateTelegramImage(composeImageRequest(normalizedUserMsg, priorHistory));
       stopWaitingTyping();
       stopStallNotice();
 
+      const sent = await sendPhotoViaCurl(ctx.chat.id, image.path);
       history.push({ role: "assistant", content: `[生成图片: ${image.path}]`, time: new Date().toISOString() });
       saveHistory(history);
-      await ctx.replyWithPhoto(new InputFile(image.path));
-      console.log(`[bot] bot → Alice: [photo] ${image.path}`);
+      console.log(`[bot] bot → Alice: [photo] ${image.path} message_id=${sent.message_id}`);
       return;
     }
 
@@ -332,13 +429,6 @@ async function handleMessage(ctx, userMsg, opts = {}) {
     const context = await gatherContext();
     const promptContext = { ...context };
     delete promptContext.recent_conversation;
-    promptContext.tool_mode = {
-      mode: toolModeRequest.mode,
-      source: toolModeRequest.source,
-      note: toolModeRequest.mode === "full"
-        ? "本轮是全工具模式：可以按需使用终端、文件、网络/MCP 工具。"
-        : "本轮是聊天模式：优先陪伴与轻量回答，不调用终端或 MCP 工具。",
-    };
     const template = readFileSync(REPLY_PROMPT_PATH, "utf-8");
     const recentHistory = history.slice(-REACTIVE_HISTORY_LIMIT);
     const userPrompt = template
@@ -374,6 +464,7 @@ async function handleMessage(ctx, userMsg, opts = {}) {
   } catch (e) {
     stopWaitingTyping();
     stopStallNotice();
+    saveHistory(history);
     console.error("[bot] reply 失败:", e.message);
     try {
       await ctx.reply(`唉，我那边出了点问题：${e.message.slice(0, 200)}\n（这条不算 ${BOT_DISPLAY_NAME} 的话，是 plumbing error）`);

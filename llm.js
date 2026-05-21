@@ -249,7 +249,7 @@ function codexPrompt(userPrompt, kind, toolMode) {
 
 - backend: codex
 - kind: ${kind}
-- tool_mode: ${toolMode}
+- task_intent: ${toolMode === TOOL_MODE_FULL ? "work-with-tools-if-needed" : "conversation"}
 
 ${userPrompt}
 
