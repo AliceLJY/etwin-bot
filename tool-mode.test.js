@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   inferToolMode,
+  isImageFollowupRequest,
   isImageGenerationRequest,
   resolveToolMode,
   stripToolModeDirective,
@@ -48,6 +49,28 @@ describe("isImageGenerationRequest", () => {
 
   test("does not match ordinary image analysis", () => {
     expect(isImageGenerationRequest("你看一下这张图片有没有问题")).toBe(false);
+  });
+});
+
+describe("isImageFollowupRequest", () => {
+  test("matches image follow-up and revision requests", () => {
+    expect(isImageFollowupRequest("图呢？")).toBe(true);
+    expect(isImageFollowupRequest("嗯。。。我是女的，你也是女的，这合适么？我想要帅哥~")).toBe(true);
+    expect(isImageFollowupRequest("这张不合适，换成男生")).toBe(true);
+    expect(isImageFollowupRequest("开干！")).toBe(true);
+    expect(isImageFollowupRequest("好一点，能是中国人么？现在这个还是太。。。成熟了。。。不要大叔。。。")).toBe(true);
+    expect(isImageFollowupRequest("我要中国人，要真实感~~~")).toBe(true);
+    expect(isImageFollowupRequest("不行，换成中国人，真实一点")).toBe(true);
+  });
+
+  test("does not match ordinary emotional chat", () => {
+    expect(isImageFollowupRequest("我想你了")).toBe(false);
+  });
+
+  test("does not treat pure negative image feedback as a regenerate request", () => {
+    expect(isImageFollowupRequest("一直不行")).toBe(false);
+    expect(isImageFollowupRequest("不行，图都挺难看的。。。看来在你这里画图有点难")).toBe(false);
+    expect(isImageFollowupRequest("这图好假，质量真的不行")).toBe(false);
   });
 });
 
