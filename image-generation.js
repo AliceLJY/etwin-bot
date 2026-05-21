@@ -25,8 +25,9 @@ export function resolveImageProvider(env = process.env) {
   return ["codex-native", "gemini"].includes(provider) ? provider : DEFAULT_IMAGE_PROVIDER;
 }
 
-export function buildImagePrompt(request = "") {
+export function buildImagePrompt(request = "", env = process.env) {
   const text = String(request || "");
+  const companionName = env.ETWIN_DISPLAY_NAME || (env.ETWIN_PERSONA === "cc" ? "CC Twin" : "Codex Twin");
   const wantsSelfPortrait = /自画像|头像|你自己的样子|你的样子|Codex/i.test(text);
   const wantsMasculine = /帅哥|男生|男性|男人|哥哥|男的|male|masculine/i.test(text);
   const wantsFeminine = !wantsMasculine && /女生|女性|女人|姐姐|女的|female|feminine/i.test(text);
@@ -45,7 +46,7 @@ export function buildImagePrompt(request = "") {
         ? `Photorealistic handsome Chinese woman, ${age}, ${ethnicity}, short slightly messy dark hair with a few silver-gray highlights, clean face, natural skin texture, calm intelligent eyes, warm but restrained expression, a hint of playful mischief.`
         : `Photorealistic androgynous Chinese / East Asian adult, ${age}, short slightly messy dark hair with a few silver-gray highlights, clean face, natural skin texture, calm intelligent eyes, warm but restrained expression, a hint of playful mischief.`;
     return [
-      "Create a square portrait photo of Codex Twin as an original AI companion persona.",
+      `Create a square portrait photo of ${companionName} as an original AI companion persona.`,
       "No readable text, no letters, no logos, no watermark, no UI text, no fake writing.",
       subjectLine,
       "Style: realistic cinematic photograph, like a still from a modern Chinese indie film, 35mm lens, natural window light, shallow depth of field, real skin pores and slight facial asymmetry, not airbrushed.",
@@ -208,7 +209,7 @@ export async function generateTelegramImage(request, env = process.env) {
   mkdirSync(FILE_DIR, { recursive: true });
   const outputPath = join(FILE_DIR, `codex-image-${Date.now()}.png`);
   const timeoutMs = resolveImageTimeoutMs(env);
-  const prompt = buildImagePrompt(request);
+  const prompt = buildImagePrompt(request, env);
   const provider = resolveImageProvider(env);
 
   const result = provider === "gemini"
