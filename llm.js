@@ -93,6 +93,7 @@ const CLAUDE_CLI_PATH =
 const LLM_MODEL = process.env.ETWIN_LLM_MODEL || "claude-sonnet-4-6";
 const LLM_EFFORT = process.env.ETWIN_LLM_EFFORT || null; // 不指定走默认
 const LLM_BACKEND = process.env.ETWIN_LLM_BACKEND || process.env.ETWIN_LLM_MODE || "claude";
+const ENABLE_CODEX_MCP = process.env.ETWIN_ENABLE_CODEX_MCP === "true";
 
 // 让 etwin-bot 产生的 session 也能出现在终端 /resume 列表
 // 详见 telegram-ai-bridge/adapters/claude.js 同款 hack
@@ -124,8 +125,9 @@ function loadUserScopeMcpServers(names) {
 // - playwright: 抓 SPA / 动态渲染页面（claude.ai/share、小红书等）
 // - context7: 查 SDK / 库文档（写代码时随时可用）
 // - recallnest: recall + write Alice 记忆（write 时 scope 强制 etwin，不污染 Alice）
-// - codex: 委托 Codex 帮跑深度任务 / 写代码 / 生图
 // - gemini-web-image: 免费链路画图
+// Codex MCP 默认不接入，避免 CC -> Codex MCP -> Codex MCP 的套娃卡死。
+// 明确需要跨代理时仍可让 CC 通过 Bash 调 `codex exec`。
 // plugin-based 的（playwright/context7）hardcode npx 命令；user-scope 的从 ~/.claude.json 抽
 const ETWIN_MCP_SERVERS = {
   playwright: {
@@ -136,8 +138,10 @@ const ETWIN_MCP_SERVERS = {
     command: "npx",
     args: ["-y", "@upstash/context7-mcp"],
   },
-  // recallnest / codex / gemini-web-image 在 user-scope（含 JINA_API_KEY / OAuth / ssh 路径）
-  ...loadUserScopeMcpServers(["recallnest", "codex", "gemini-web-image"]),
+  // recallnest / gemini-web-image 在 user-scope（含 JINA_API_KEY / OAuth / ssh 路径）
+  ...loadUserScopeMcpServers(ENABLE_CODEX_MCP
+    ? ["recallnest", "codex", "gemini-web-image"]
+    : ["recallnest", "gemini-web-image"]),
 };
 
 // 白名单：让 E-Twin 像 CC 一样能干活——写代码 / 跑命令 / 抓信息 / 查记忆 / 画图 / 调 codex
@@ -159,8 +163,8 @@ const ETWIN_ALLOWED_TOOLS = [
   "mcp__playwright__*",
   "mcp__context7__*",
   "mcp__recallnest__*",
-  "mcp__codex__*",
   "mcp__gemini-web-image__*",
+  ...(ENABLE_CODEX_MCP ? ["mcp__codex__*"] : []),
 ];
 
 // 操作纪律：附加到 systemPrompt 末尾。约束行动而不影响 voice persona
@@ -177,6 +181,7 @@ const ETWIN_OPS_DISCIPLINE = `
 - 修代码前先 \`Read\` 现状，不靠回忆推断 API。改 API/加参数时 grep 所有 caller 确认。
 - 跑长命令（预估 > 5 分钟）传 \`run_in_background: true\`，不要长期阻塞。
 - 写 RecallNest 时 scope 强制传 \`"etwin:default"\` 或 \`"project:etwin-bot"\`——不要写到 Alice 自己的 RN scope 里污染她的记忆。
+- 图片生成请求由外层 \`bot.js -> image-generation.js\` 统一处理；你在工具链里只负责解释/排查图片管线，不要再调用 Codex MCP 或 \`codex exec\` 去生成图片。
 - 不确定就说"不确定 / 待确认"，不编造 file path 或 API 行为，不假装跑过命令。
 - 别用工程师速记词（落盘 / 齐活 / 搞定 / 一把梭 / 跑通 / 干到头）——这违背 persona voice，宁可多说几个字。
 - 你跑在 mini 上（不在 MacBook）。要操作 MacBook 上的文件用 \`ssh mac …\`；要操作 mini 本地直接跑。
@@ -202,8 +207,20 @@ const ETWIN_OPS_DISCIPLINE = `
 
 简言之：自己的家自己收拾；别人的地盘进去先敲门。`;
 
+const ETWIN_CHAT_DISCIPLINE = `
+
+---
+
+# 普通 Telegram 对话
+
+这一轮只是自然聊天。不要主动查文件、跑命令、解释工具链路或进入排障流程；先按当前 persona 回应 Alice 话里的情绪、欲望和关系感。
+
+如果 Alice 明确要求你查信息、看文件、改代码、重启服务或生成图片，外层路由会把你切到工作链路；在普通对话里别自己加戏。
+
+回复保持中文、短自然段、双换行分隔。`;
+
 // 读 persona 三件套 + 追加 long-term-memory 拼成 system prompt append
-export function buildSystemPrompt() {
+export function buildSystemPrompt(toolMode = TOOL_MODE_FULL) {
   const personaMode = process.env.ETWIN_PERSONA || (LLM_BACKEND === "codex" ? "codex" : "etwin");
   let personaPrompt;
   if (personaMode === "codex") {
@@ -237,11 +254,13 @@ export function buildSystemPrompt() {
     } catch (_) {}
   }
 
-  return `${personaPrompt}${memorySection}${ETWIN_OPS_DISCIPLINE}`;
+  const mode = normalizeToolMode(toolMode);
+  const discipline = mode === TOOL_MODE_FULL ? ETWIN_OPS_DISCIPLINE : ETWIN_CHAT_DISCIPLINE;
+  return `${personaPrompt}${memorySection}${discipline}`;
 }
 
 function codexPrompt(userPrompt, kind, toolMode) {
-  return `${buildSystemPrompt()}
+  return `${buildSystemPrompt(toolMode)}
 
 ---
 
@@ -268,6 +287,7 @@ function spawnCodex(args, input, timeoutMs) {
     const child = spawn("codex", args, {
       cwd: PROJECT_DIR,
       env: process.env,
+      detached: true,
       stdio: ["pipe", "pipe", "pipe"],
     });
 
@@ -283,7 +303,11 @@ function spawnCodex(args, input, timeoutMs) {
     const succeed = (value) => finish(resolve, value);
 
     const timer = setTimeout(() => {
-      child.kill("SIGTERM");
+      try {
+        process.kill(-child.pid, "SIGTERM");
+      } catch (_) {
+        child.kill("SIGTERM");
+      }
       fail(new Error(`codex exec timed out after ${timeoutMs}ms (elapsed=${Date.now() - startedAt}ms)`));
     }, timeoutMs);
 
@@ -447,7 +471,7 @@ export async function callClaudeSDK(userPrompt, opts = {}) {
     systemPrompt: {
       type: "preset",
       preset: "claude_code",
-      append: buildSystemPrompt(),
+      append: buildSystemPrompt(toolMode),
     },
     // self-loop 单 turn 决策；reactive 留够 tool 调用空间。
     // 长文件审读 / 跨机查记录 / self-healing 会连续用工具，15 turns 偶发不够。

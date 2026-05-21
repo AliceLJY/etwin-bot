@@ -13,7 +13,7 @@ import { gatherContext } from "./context.js";
 import { startSelfLoop, markAliceReaction } from "./self-loop.js";
 import { shouldDistill, runDistill } from "./distill.js";
 import { FILE_DIR, INSTANCE_ID, PROJECT_DIR, dataPath, ensureRuntimeDirs } from "./paths.js";
-import { isImageFollowupRequest, isImageGenerationRequest, resolveToolMode } from "./tool-mode.js";
+import { TOOL_MODE_FULL, isImageFollowupRequest, isImageGenerationRequest, resolveToolMode } from "./tool-mode.js";
 
 // 下载 TG 文件到本地（参考 telegram-ai-bridge bridge.js downloadFile）
 ensureRuntimeDirs();
@@ -234,6 +234,21 @@ function hasCompletedSameImageRequest(message, history) {
   return false;
 }
 
+async function buildReactivePromptContext(toolMode) {
+  if (toolMode === TOOL_MODE_FULL) {
+    const context = await gatherContext();
+    const promptContext = { ...context };
+    delete promptContext.recent_conversation;
+    return promptContext;
+  }
+
+  const now = new Date();
+  return {
+    time_now: now.toISOString(),
+    hour_of_day: now.getHours(),
+  };
+}
+
 function loadPendingMedia() {
   if (!existsSync(PENDING_MEDIA_PATH)) return {};
   try { return JSON.parse(readFileSync(PENDING_MEDIA_PATH, "utf-8")); } catch (_) { return {}; }
@@ -426,9 +441,7 @@ async function handleMessage(ctx, userMsg, opts = {}) {
     stopWaitingTyping = startTypingKeepalive(ctx);
     stopStallNotice = startStallNotice(ctx);
 
-    const context = await gatherContext();
-    const promptContext = { ...context };
-    delete promptContext.recent_conversation;
+    const promptContext = await buildReactivePromptContext(toolModeRequest.mode);
     const template = readFileSync(REPLY_PROMPT_PATH, "utf-8");
     const recentHistory = history.slice(-REACTIVE_HISTORY_LIMIT);
     const userPrompt = template

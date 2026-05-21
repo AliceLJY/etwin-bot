@@ -8,6 +8,7 @@ import {
   DEFAULT_CODEX_REASONING_EFFORT,
   DEFAULT_CODEX_SERVICE_TIER,
   DEFAULT_CODEX_TIMEOUT_MS,
+  buildSystemPrompt,
   resolveClaudeMaxTurns,
   resolveCodexMaxAttempts,
   resolveCodexReasoningEffort,
@@ -158,5 +159,18 @@ describe("resolveClaudeMaxTurns", () => {
   test("uses defaults for invalid turn overrides", () => {
     expect(resolveClaudeMaxTurns("self-loop", { ETWIN_CLAUDE_SELF_LOOP_MAX_TURNS: "nope" })).toBe(DEFAULT_CLAUDE_SELF_LOOP_MAX_TURNS);
     expect(resolveClaudeMaxTurns("reactive", { ETWIN_CLAUDE_REACTIVE_MAX_TURNS: "0" })).toBe(DEFAULT_CLAUDE_REACTIVE_MAX_TURNS);
+  });
+});
+
+describe("buildSystemPrompt", () => {
+  test("keeps chat prompt lighter than full work prompt", () => {
+    const chatPrompt = buildSystemPrompt("chat");
+    const fullPrompt = buildSystemPrompt("full");
+
+    expect(chatPrompt).toContain("普通 Telegram 对话");
+    expect(chatPrompt).not.toContain("Self-Healing");
+    expect(fullPrompt).toContain("操作纪律");
+    expect(fullPrompt).toContain("Self-Healing");
+    expect(chatPrompt.length).toBeLessThan(fullPrompt.length);
   });
 });

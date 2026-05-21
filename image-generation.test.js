@@ -8,13 +8,24 @@ import {
 
 describe("buildImagePrompt", () => {
   test("uses photorealistic Chinese portrait constraints for Codex self-portrait revisions", () => {
-    const prompt = buildImagePrompt("画一个自画像，我想要帅哥，中国人，真实感，不要大叔，不要动漫");
+    const prompt = buildImagePrompt("画一个自画像，我想要帅哥，中国人，真实感，不要大叔，不要动漫", {
+      ETWIN_DISPLAY_NAME: "Codex Twin",
+      ETWIN_PERSONA: "codex",
+    });
 
+    expect(prompt).toContain("Codex Twin");
     expect(prompt).toContain("Photorealistic handsome Chinese man");
     expect(prompt).toContain("Chinese / East Asian facial features");
     expect(prompt).toContain("realistic cinematic photograph");
     expect(prompt).toContain("Avoid: anime, manga, illustration, digital painting, CGI, 3D render");
     expect(prompt).toContain("mature uncle");
+  });
+
+  test("uses the configured companion name for CC self-portrait requests", () => {
+    const prompt = buildImagePrompt("你能画个自画像么？", { ETWIN_DISPLAY_NAME: "CC Twin", ETWIN_PERSONA: "cc" });
+
+    expect(prompt).toContain("CC Twin");
+    expect(prompt).not.toContain("Codex Twin");
   });
 });
 
