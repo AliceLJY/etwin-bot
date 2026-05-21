@@ -2,16 +2,17 @@
 // bot.js — etwin-bot 主入口
 // grammy reactive 对话 + self-loop proactive 自驱
 
-import { Bot, GrammyError } from "grammy";
+import { Bot, GrammyError, InputFile } from "grammy";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, renameSync } from "fs";
 import { join } from "path";
 import { callMiniCC } from "./llm.js";
+import { generateTelegramImage } from "./image-generation.js";
 import { gatherContext } from "./context.js";
 import { startSelfLoop, markAliceReaction } from "./self-loop.js";
 import { shouldDistill, runDistill } from "./distill.js";
 import { FILE_DIR, INSTANCE_ID, PROJECT_DIR, dataPath, ensureRuntimeDirs } from "./paths.js";
-import { resolveToolMode } from "./tool-mode.js";
+import { isImageGenerationRequest, resolveToolMode } from "./tool-mode.js";
 
 // 下载 TG 文件到本地（参考 telegram-ai-bridge bridge.js downloadFile）
 ensureRuntimeDirs();
@@ -109,6 +110,15 @@ function startTypingKeepalive(ctx) {
   const timer = setInterval(() => {
     ctx.replyWithChatAction("typing").catch(() => {});
   }, TYPING_KEEPALIVE_MS);
+  if (typeof timer.unref === "function") timer.unref();
+  return () => clearInterval(timer);
+}
+
+function startUploadPhotoKeepalive(ctx) {
+  const intervalMs = Number.isFinite(TYPING_KEEPALIVE_MS) && TYPING_KEEPALIVE_MS > 0 ? TYPING_KEEPALIVE_MS : 4500;
+  const timer = setInterval(() => {
+    ctx.replyWithChatAction("upload_photo").catch(() => {});
+  }, intervalMs);
   if (typeof timer.unref === "function") timer.unref();
   return () => clearInterval(timer);
 }
@@ -299,6 +309,22 @@ async function handleMessage(ctx, userMsg, opts = {}) {
   let stopStallNotice = () => {};
 
   try {
+    if ((opts.images || []).length === 0 && isImageGenerationRequest(normalizedUserMsg)) {
+      await ctx.replyWithChatAction("upload_photo");
+      stopWaitingTyping = startUploadPhotoKeepalive(ctx);
+      stopStallNotice = startStallNotice(ctx);
+
+      const image = await generateTelegramImage(normalizedUserMsg);
+      stopWaitingTyping();
+      stopStallNotice();
+
+      history.push({ role: "assistant", content: `[生成图片: ${image.path}]`, time: new Date().toISOString() });
+      saveHistory(history);
+      await ctx.replyWithPhoto(new InputFile(image.path));
+      console.log(`[bot] bot → Alice: [photo] ${image.path}`);
+      return;
+    }
+
     await ctx.replyWithChatAction("typing");
     stopWaitingTyping = startTypingKeepalive(ctx);
     stopStallNotice = startStallNotice(ctx);

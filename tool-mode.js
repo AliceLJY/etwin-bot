@@ -9,6 +9,12 @@ const FULL_INTENT_PATTERNS = [
   /(?:terminal|终端|shell|bash|命令|日志|进程|launchctl|git|ssh|rg|grep|npm|bun|node)/i,
 ];
 
+const IMAGE_GENERATION_PATTERNS = [
+  /(?:画图|生图|生成图片|生成一张|画一张|画一个|画一下|配图)/i,
+  /(?:头像|自画像|插画|封面).*(?:画|生成|做|出|来|不要文字)/i,
+  /(?:画|生成|做|出).*(?:头像|自画像|插画|封面|图片|图)/i,
+];
+
 function normalizeMode(value, fallback = TOOL_MODE_AUTO) {
   const mode = String(value || "").trim().toLowerCase();
   return [TOOL_MODE_AUTO, TOOL_MODE_CHAT, TOOL_MODE_FULL].includes(mode) ? mode : fallback;
@@ -27,9 +33,13 @@ export function stripToolModeDirective(message = "") {
 }
 
 export function inferToolMode(message = "") {
-  return FULL_INTENT_PATTERNS.some((pattern) => pattern.test(message))
+  return isImageGenerationRequest(message) || FULL_INTENT_PATTERNS.some((pattern) => pattern.test(message))
     ? TOOL_MODE_FULL
     : TOOL_MODE_CHAT;
+}
+
+export function isImageGenerationRequest(message = "") {
+  return IMAGE_GENERATION_PATTERNS.some((pattern) => pattern.test(message));
 }
 
 export function resolveToolMode(message = "", env = process.env) {
