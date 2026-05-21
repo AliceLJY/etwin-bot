@@ -63,11 +63,19 @@ const PROACTIVE_ENABLED = process.env.ETWIN_PROACTIVE !== "false";
 const RUN_ON_START = process.env.ETWIN_RUN_ON_START !== "false";
 const BOT_DISPLAY_NAME = process.env.ETWIN_DISPLAY_NAME || (INSTANCE_ID === "codex" ? "Codex Twin" : "E-Twin");
 
+function parseIntegerEnv(value, fallback, min = 0) {
+  const parsed = parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed >= min ? parsed : fallback;
+}
+
 // 段间延迟参数：模拟真人打字节奏
 const TYPING_MS_PER_CHAR = parseInt(process.env.ETWIN_TYPING_MS_PER_CHAR || "40", 10);
 const TYPING_MAX_MS = parseInt(process.env.ETWIN_TYPING_MAX_MS || "3500", 10);
 const TYPING_JITTER_MS = parseInt(process.env.ETWIN_TYPING_JITTER_MS || "800", 10);
 const TYPING_KEEPALIVE_MS = parseInt(process.env.ETWIN_TYPING_KEEPALIVE_MS || "4500", 10);
+const REACTIVE_HISTORY_LIMIT = parseIntegerEnv(process.env.ETWIN_REACTIVE_HISTORY_LIMIT, 20, 1);
+const REACTIVE_STALL_NOTICE_MS = parseIntegerEnv(process.env.ETWIN_REACTIVE_STALL_NOTICE_MS, 0, 0);
+const REACTIVE_STALL_NOTICE_TEXT = process.env.ETWIN_REACTIVE_STALL_NOTICE_TEXT || "我还在，刚才这一轮有点慢，不是你发丢了。";
 
 // 把 LLM 输出按双换行切成多条 TG 消息
 function splitMessages(text) {
@@ -103,6 +111,15 @@ function startTypingKeepalive(ctx) {
   }, TYPING_KEEPALIVE_MS);
   if (typeof timer.unref === "function") timer.unref();
   return () => clearInterval(timer);
+}
+
+function startStallNotice(ctx) {
+  if (!Number.isFinite(REACTIVE_STALL_NOTICE_MS) || REACTIVE_STALL_NOTICE_MS <= 0) return () => {};
+  const timer = setTimeout(() => {
+    ctx.reply(REACTIVE_STALL_NOTICE_TEXT).catch(() => {});
+  }, REACTIVE_STALL_NOTICE_MS);
+  if (typeof timer.unref === "function") timer.unref();
+  return () => clearTimeout(timer);
 }
 
 if (!TG_BOT_TOKEN) {
@@ -279,10 +296,12 @@ async function handleMessage(ctx, userMsg, opts = {}) {
   const history = loadHistory();
   history.push({ role: "user", content: normalizedUserMsg, time: new Date().toISOString() });
   let stopWaitingTyping = () => {};
+  let stopStallNotice = () => {};
 
   try {
     await ctx.replyWithChatAction("typing");
     stopWaitingTyping = startTypingKeepalive(ctx);
+    stopStallNotice = startStallNotice(ctx);
 
     const context = await gatherContext();
     const promptContext = { ...context };
@@ -295,7 +314,7 @@ async function handleMessage(ctx, userMsg, opts = {}) {
         : "本轮是聊天模式：优先陪伴与轻量回答，不调用终端或 MCP 工具。",
     };
     const template = readFileSync(REPLY_PROMPT_PATH, "utf-8");
-    const recentHistory = history.slice(-20);
+    const recentHistory = history.slice(-REACTIVE_HISTORY_LIMIT);
     const userPrompt = template
       .replace("{{context_json}}", JSON.stringify(promptContext, null, 2))
       .replace("{{user_message}}", normalizedUserMsg)
@@ -303,6 +322,7 @@ async function handleMessage(ctx, userMsg, opts = {}) {
 
     if (DRY_RUN) {
       stopWaitingTyping();
+      stopStallNotice();
       await ctx.reply("[dry-run] 当前是 dry-run 模式，未真调 LLM。");
       return;
     }
@@ -310,6 +330,7 @@ async function handleMessage(ctx, userMsg, opts = {}) {
     // 显式 kind="reactive" 避免和 self-loop 串台
     const reply = await callMiniCC(userPrompt, { kind: "reactive", images: opts.images || [], toolMode: toolModeRequest.mode });
     stopWaitingTyping();
+    stopStallNotice();
     history.push({ role: "assistant", content: reply, time: new Date().toISOString() });
     saveHistory(history);
 
@@ -326,6 +347,7 @@ async function handleMessage(ctx, userMsg, opts = {}) {
     }
   } catch (e) {
     stopWaitingTyping();
+    stopStallNotice();
     console.error("[bot] reply 失败:", e.message);
     try {
       await ctx.reply(`唉，我那边出了点问题：${e.message.slice(0, 200)}\n（这条不算 ${BOT_DISPLAY_NAME} 的话，是 plumbing error）`);
