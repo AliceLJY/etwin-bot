@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   inferToolMode,
+  isImageGenerationRequest,
   resolveToolMode,
   stripToolModeDirective,
 } from "./tool-mode.js";
@@ -31,6 +32,22 @@ describe("inferToolMode", () => {
     expect(inferToolMode("你跑一下测试")).toBe("full");
     expect(inferToolMode("重启 bot")).toBe("full");
     expect(inferToolMode("这个有问题吗\n\n[上条图片文件: /tmp/photo.jpg]")).toBe("full");
+  });
+
+  test("detects image generation as full mode", () => {
+    expect(inferToolMode("想要你画图~~画一个自画像，不要文字")).toBe("full");
+    expect(inferToolMode("给我生成一张头像")).toBe("full");
+  });
+});
+
+describe("isImageGenerationRequest", () => {
+  test("matches direct image generation requests", () => {
+    expect(isImageGenerationRequest("想要你画图~~画一个自画像，不要文字")).toBe(true);
+    expect(isImageGenerationRequest("帮我配图")).toBe(true);
+  });
+
+  test("does not match ordinary image analysis", () => {
+    expect(isImageGenerationRequest("你看一下这张图片有没有问题")).toBe(false);
   });
 });
 
