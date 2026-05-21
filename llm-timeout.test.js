@@ -2,15 +2,20 @@ import { describe, expect, test } from "bun:test";
 import {
   DEFAULT_CLAUDE_REACTIVE_MAX_TURNS,
   DEFAULT_CLAUDE_SELF_LOOP_MAX_TURNS,
+  DEFAULT_CODEX_CHAT_MAX_ATTEMPTS,
+  DEFAULT_CODEX_CHAT_TIMEOUT_MS,
+  DEFAULT_CODEX_FULL_TIMEOUT_MS,
   DEFAULT_CODEX_REASONING_EFFORT,
   DEFAULT_CODEX_SERVICE_TIER,
   DEFAULT_CODEX_TIMEOUT_MS,
   resolveClaudeMaxTurns,
+  resolveCodexMaxAttempts,
   resolveCodexReasoningEffort,
   resolveCodexSandbox,
   resolveCodexServiceTier,
   resolveCodexTimeoutMs,
   shouldIgnoreCodexUserConfig,
+  shouldUseCodexEphemeral,
 } from "./llm.js";
 
 describe("resolveCodexTimeoutMs", () => {
@@ -29,9 +34,35 @@ describe("resolveCodexTimeoutMs", () => {
     expect(resolveCodexTimeoutMs({ LLM_TIMEOUT_MS: "300000" })).toBe(300000);
   });
 
+  test("uses a shorter chat timeout when tool mode is known", () => {
+    expect(resolveCodexTimeoutMs({}, "chat")).toBe(DEFAULT_CODEX_CHAT_TIMEOUT_MS);
+    expect(resolveCodexTimeoutMs({}, "full")).toBe(DEFAULT_CODEX_FULL_TIMEOUT_MS);
+  });
+
+  test("accepts mode-specific timeout overrides", () => {
+    expect(resolveCodexTimeoutMs({ ETWIN_CODEX_CHAT_TIMEOUT_MS: "180000" }, "chat")).toBe(180000);
+    expect(resolveCodexTimeoutMs({ ETWIN_CODEX_FULL_TIMEOUT_MS: "900000" }, "full")).toBe(900000);
+  });
+
   test("uses the default for invalid values", () => {
     expect(resolveCodexTimeoutMs({ ETWIN_CODEX_TIMEOUT_MS: "nope" })).toBe(DEFAULT_CODEX_TIMEOUT_MS);
     expect(resolveCodexTimeoutMs({ ETWIN_CODEX_TIMEOUT_MS: "0" })).toBe(DEFAULT_CODEX_TIMEOUT_MS);
+  });
+});
+
+describe("resolveCodexMaxAttempts", () => {
+  test("retries Codex reactive chat once by default", () => {
+    expect(resolveCodexMaxAttempts("reactive", "chat", {})).toBe(DEFAULT_CODEX_CHAT_MAX_ATTEMPTS);
+  });
+
+  test("does not retry full mode or self-loop by default", () => {
+    expect(resolveCodexMaxAttempts("reactive", "full", {})).toBe(1);
+    expect(resolveCodexMaxAttempts("self-loop", "chat", {})).toBe(1);
+  });
+
+  test("accepts a bounded chat retry override", () => {
+    expect(resolveCodexMaxAttempts("reactive", "chat", { ETWIN_CODEX_CHAT_MAX_ATTEMPTS: "1" })).toBe(1);
+    expect(resolveCodexMaxAttempts("reactive", "chat", { ETWIN_CODEX_CHAT_MAX_ATTEMPTS: "9" })).toBe(3);
   });
 });
 
@@ -77,6 +108,21 @@ describe("shouldIgnoreCodexUserConfig", () => {
   test("allows explicit chat and full overrides", () => {
     expect(shouldIgnoreCodexUserConfig("chat", { ETWIN_CODEX_CHAT_IGNORE_USER_CONFIG: "false" })).toBe(false);
     expect(shouldIgnoreCodexUserConfig("full", { ETWIN_CODEX_FULL_IGNORE_USER_CONFIG: "true" })).toBe(true);
+  });
+});
+
+describe("shouldUseCodexEphemeral", () => {
+  test("uses ephemeral sessions for chat mode by default", () => {
+    expect(shouldUseCodexEphemeral("chat", {})).toBe(true);
+  });
+
+  test("keeps full mode persistent unless explicitly enabled", () => {
+    expect(shouldUseCodexEphemeral("full", {})).toBe(false);
+    expect(shouldUseCodexEphemeral("full", { ETWIN_CODEX_FULL_EPHEMERAL: "true" })).toBe(true);
+  });
+
+  test("allows chat mode to opt out", () => {
+    expect(shouldUseCodexEphemeral("chat", { ETWIN_CODEX_CHAT_EPHEMERAL: "false" })).toBe(false);
   });
 });
 

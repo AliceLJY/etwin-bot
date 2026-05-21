@@ -13,6 +13,9 @@ ensureRuntimeDirs();
 
 const SESSION_STORE = dataPath("session-ids.json");
 export const DEFAULT_CODEX_TIMEOUT_MS = 600000;
+export const DEFAULT_CODEX_CHAT_TIMEOUT_MS = 300000;
+export const DEFAULT_CODEX_FULL_TIMEOUT_MS = 600000;
+export const DEFAULT_CODEX_CHAT_MAX_ATTEMPTS = 2;
 export const DEFAULT_CODEX_REASONING_EFFORT = "xhigh";
 export const DEFAULT_CODEX_SERVICE_TIER = "fast";
 export const DEFAULT_CLAUDE_SELF_LOOP_MAX_TURNS = 1;
@@ -23,9 +26,31 @@ function parsePositiveInteger(value, fallback) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-export function resolveCodexTimeoutMs(env = process.env) {
+export function resolveCodexTimeoutMs(env = process.env, toolMode = null) {
+  if (toolMode) {
+    const mode = normalizeToolMode(toolMode);
+    if (mode === TOOL_MODE_CHAT) {
+      const raw = env.ETWIN_CODEX_CHAT_TIMEOUT_MS || env.ETWIN_CODEX_TIMEOUT_MS || env.LLM_TIMEOUT_MS || String(DEFAULT_CODEX_CHAT_TIMEOUT_MS);
+      return parsePositiveInteger(raw, DEFAULT_CODEX_CHAT_TIMEOUT_MS);
+    }
+    if (mode === TOOL_MODE_FULL) {
+      const raw = env.ETWIN_CODEX_FULL_TIMEOUT_MS || env.ETWIN_CODEX_TIMEOUT_MS || env.LLM_TIMEOUT_MS || String(DEFAULT_CODEX_FULL_TIMEOUT_MS);
+      return parsePositiveInteger(raw, DEFAULT_CODEX_FULL_TIMEOUT_MS);
+    }
+  }
   const raw = env.ETWIN_CODEX_TIMEOUT_MS || env.LLM_TIMEOUT_MS || String(DEFAULT_CODEX_TIMEOUT_MS);
   return parsePositiveInteger(raw, DEFAULT_CODEX_TIMEOUT_MS);
+}
+
+export function resolveCodexMaxAttempts(kind = "reactive", toolMode = TOOL_MODE_CHAT, env = process.env) {
+  if (kind !== "reactive" || normalizeToolMode(toolMode) !== TOOL_MODE_CHAT) return 1;
+  return Math.min(parsePositiveInteger(env.ETWIN_CODEX_CHAT_MAX_ATTEMPTS, DEFAULT_CODEX_CHAT_MAX_ATTEMPTS), 3);
+}
+
+export function shouldUseCodexEphemeral(toolMode = TOOL_MODE_CHAT, env = process.env) {
+  const mode = normalizeToolMode(toolMode);
+  if (mode === TOOL_MODE_FULL) return env.ETWIN_CODEX_FULL_EPHEMERAL === "true";
+  return env.ETWIN_CODEX_CHAT_EPHEMERAL !== "false";
 }
 
 export function resolveCodexReasoningEffort(env = process.env) {
@@ -239,6 +264,7 @@ ${userPrompt}
 function spawnCodex(args, input, timeoutMs) {
   return new Promise((resolve, reject) => {
     const startedAt = Date.now();
+    let settled = false;
     const child = spawn("codex", args, {
       cwd: PROJECT_DIR,
       env: process.env,
@@ -247,27 +273,38 @@ function spawnCodex(args, input, timeoutMs) {
 
     let stdout = "";
     let stderr = "";
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn(value);
+    };
+    const fail = (err) => finish(reject, err);
+    const succeed = (value) => finish(resolve, value);
+
     const timer = setTimeout(() => {
       child.kill("SIGTERM");
-      reject(new Error(`codex exec timed out after ${timeoutMs}ms (elapsed=${Date.now() - startedAt}ms)`));
+      fail(new Error(`codex exec timed out after ${timeoutMs}ms (elapsed=${Date.now() - startedAt}ms)`));
     }, timeoutMs);
 
     child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
     child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
-    child.on("error", (err) => {
-      clearTimeout(timer);
-      reject(err);
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
+    child.on("error", fail);
+    child.on("close", (code, signal) => {
       const elapsed = Date.now() - startedAt;
-      if (code === 0) resolve({ stdout, stderr });
-      else reject(new Error(`codex exec exited ${code} after ${elapsed}ms: ${stderr.slice(-1200) || stdout.slice(-1200)}`));
+      if (code === 0) succeed({ stdout, stderr });
+      else if (signal) fail(new Error(`codex exec terminated by ${signal} after ${elapsed}ms: ${stderr.slice(-1200) || stdout.slice(-1200)}`));
+      else fail(new Error(`codex exec exited ${code} after ${elapsed}ms: ${stderr.slice(-1200) || stdout.slice(-1200)}`));
     });
 
     child.stdin.write(input);
     child.stdin.end();
   });
+}
+
+function isRetryableCodexError(err) {
+  const message = err?.message || "";
+  return message.includes("returned empty output") || message.includes("exited null");
 }
 
 async function callCodexExec(userPrompt, opts = {}) {
@@ -286,7 +323,8 @@ async function callCodexExec(userPrompt, opts = {}) {
   const outputPath = dataPath(`codex-last-${kind}.txt`);
   const model = process.env.ETWIN_CODEX_MODEL || process.env.CODEX_MODEL || null;
   const sandbox = resolveCodexSandbox(toolMode);
-  const timeoutMs = resolveCodexTimeoutMs();
+  const timeoutMs = resolveCodexTimeoutMs(process.env, toolMode);
+  const maxAttempts = resolveCodexMaxAttempts(kind, toolMode);
   const reasoningEffort = resolveCodexReasoningEffort();
   const serviceTier = resolveCodexServiceTier();
   const images = (opts.images || []).filter((imagePath) => imagePath && existsSync(imagePath));
@@ -304,6 +342,9 @@ async function callCodexExec(userPrompt, opts = {}) {
     "-c", `model_reasoning_effort="${reasoningEffort}"`,
     "-o", outputPath,
   );
+  if (shouldUseCodexEphemeral(toolMode)) {
+    args.push("--ephemeral");
+  }
   if (serviceTier) {
     args.push("-c", `service_tier="${serviceTier}"`);
   }
@@ -314,15 +355,29 @@ async function callCodexExec(userPrompt, opts = {}) {
   args.push("-");
 
   const prompt = codexPrompt(userPrompt, kind, toolMode);
-  console.log(`[codex] exec kind=${kind} toolMode=${toolMode} model=${model || "(default)"} effort=${reasoningEffort} tier=${serviceTier || "(default)"} sandbox=${sandbox} ignore_user_config=${shouldIgnoreCodexUserConfig(toolMode)}`);
-  const { stdout } = await spawnCodex(args, prompt, timeoutMs);
+  let lastError = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      writeFileSync(outputPath, "");
+      console.log(`[codex] exec kind=${kind} toolMode=${toolMode} attempt=${attempt}/${maxAttempts} model=${model || "(default)"} effort=${reasoningEffort} tier=${serviceTier || "(default)"} sandbox=${sandbox} ignore_user_config=${shouldIgnoreCodexUserConfig(toolMode)} ephemeral=${shouldUseCodexEphemeral(toolMode)} timeout=${timeoutMs}`);
+      const { stdout } = await spawnCodex(args, prompt, timeoutMs);
 
-  if (existsSync(outputPath)) {
-    const output = readFileSync(outputPath, "utf-8").trim();
-    if (output) return output;
+      const fileOutput = existsSync(outputPath) ? readFileSync(outputPath, "utf-8").trim() : "";
+      const output = fileOutput || stdout.trim();
+      if (output) return output;
+
+      throw new Error("codex exec returned empty output");
+    } catch (err) {
+      lastError = err;
+      if (attempt < maxAttempts && isRetryableCodexError(err)) {
+        console.warn(`[codex] retrying after transient empty/exit failure: ${err.message.slice(0, 200)}`);
+        continue;
+      }
+      throw err;
+    }
   }
 
-  return stdout.trim();
+  throw lastError || new Error("codex exec failed without error detail");
 }
 
 // 持久化 session id：让 self-loop / reactive 各自维护一个 session 用于 resume
