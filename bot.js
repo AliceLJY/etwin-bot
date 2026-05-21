@@ -79,6 +79,17 @@ const REACTIVE_HISTORY_LIMIT = parseIntegerEnv(process.env.ETWIN_REACTIVE_HISTOR
 const REACTIVE_STALL_NOTICE_MS = parseIntegerEnv(process.env.ETWIN_REACTIVE_STALL_NOTICE_MS, 0, 0);
 const REACTIVE_STALL_NOTICE_TEXT = process.env.ETWIN_REACTIVE_STALL_NOTICE_TEXT || "我还在，刚才这一轮有点慢，不是你发丢了。";
 
+// 区分"基础设施抖动"(LLM 超时 / 子进程被重启杀掉)和真正的代码 bug。
+// 前者不把 SIGTERM / timed out 这种技术黑话弹给 Alice（破坏跟分身对话的沉浸感），
+// 后者保留 plumbing error 细节方便排查。
+function friendlyErrorReply(e, displayName) {
+  const msg = e?.message || "";
+  if (/timed out|SIGTERM|SIGKILL|terminated by|exited \d+ after|returned empty/i.test(msg)) {
+    return "我刚卡了一下，没接住你这句。你再发一遍，我马上回。";
+  }
+  return `唉，我那边出了点问题：${msg.slice(0, 200)}\n（这条不算 ${displayName} 的话，是 plumbing error）`;
+}
+
 // 把 LLM 输出按双换行切成多条 TG 消息
 function splitMessages(text) {
   if (!text) return [];
@@ -480,7 +491,7 @@ async function handleMessage(ctx, userMsg, opts = {}) {
     saveHistory(history);
     console.error("[bot] reply 失败:", e.message);
     try {
-      await ctx.reply(`唉，我那边出了点问题：${e.message.slice(0, 200)}\n（这条不算 ${BOT_DISPLAY_NAME} 的话，是 plumbing error）`);
+      await ctx.reply(friendlyErrorReply(e, BOT_DISPLAY_NAME));
     } catch (_) {}
   }
 }
