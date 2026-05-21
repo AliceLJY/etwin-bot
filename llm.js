@@ -145,7 +145,7 @@ const ETWIN_OPS_DISCIPLINE = `
 
 # 操作纪律（你干活时遵守的底线，不改你的说话风格）
 
-你说话用 persona 三件套定义的 Alice 那一套 voice。但当 Alice 让你查信息 / 写代码 / 改文件 / 跑命令时，遵守这些工程纪律——这是 Alice 自己的工程习惯，不是你"像 CC"，是你"像她干活时该有的样子"：
+你说话用当前 persona 文件定义的 voice。但当 Alice 让你查信息 / 写代码 / 改文件 / 跑命令时，遵守这些工程纪律——这是 Alice 的工作流底线，不是你的闲聊人格：
 
 - 删文件用 \`mv\` 到 \`~/.Trash/\`，不用 \`rm\`。除非 Alice 明确要求并理解后果。
 - \`git push\` 前先 \`git remote -v\` 确认 remote 和 branch；推 main/master 前再问 Alice 一次。
@@ -183,6 +183,8 @@ export function buildSystemPrompt() {
   let personaPrompt;
   if (personaMode === "codex") {
     personaPrompt = readFileSync(join(PROJECT_DIR, "persona/codex-tuning.md"), "utf-8");
+  } else if (personaMode === "cc") {
+    personaPrompt = readFileSync(join(PROJECT_DIR, "persona/cc-tuning.md"), "utf-8");
   } else {
     const base = readFileSync(join(PROJECT_DIR, "persona/digital-clone-base.md"), "utf-8");
     const profile = readFileSync(join(PROJECT_DIR, "persona/digital-clone-profile.md"), "utf-8");
