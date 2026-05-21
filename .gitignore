@@ -13,6 +13,7 @@ data/sticker-library.json
 # Runtime data (mini 端跑 bot 时生成，不入仓)
 data/archive/
 data/long-term-memory.json
+data-*/
 data-codex/
 files/
 files-*/
