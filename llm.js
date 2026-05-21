@@ -16,7 +16,9 @@ export const DEFAULT_CODEX_TIMEOUT_MS = 600000;
 export const DEFAULT_CODEX_CHAT_TIMEOUT_MS = 300000;
 export const DEFAULT_CODEX_FULL_TIMEOUT_MS = 600000;
 export const DEFAULT_CODEX_CHAT_MAX_ATTEMPTS = 2;
-export const DEFAULT_CODEX_REASONING_EFFORT = "xhigh";
+export const DEFAULT_CODEX_REASONING_EFFORT = "medium";
+export const DEFAULT_CODEX_CHAT_REASONING_EFFORT = "medium";
+export const DEFAULT_CODEX_FULL_REASONING_EFFORT = "high";
 export const DEFAULT_CODEX_SERVICE_TIER = "fast";
 export const DEFAULT_CLAUDE_SELF_LOOP_MAX_TURNS = 1;
 export const DEFAULT_CLAUDE_REACTIVE_MAX_TURNS = 30;
@@ -53,9 +55,22 @@ export function shouldUseCodexEphemeral(toolMode = TOOL_MODE_CHAT, env = process
   return env.ETWIN_CODEX_CHAT_EPHEMERAL !== "false";
 }
 
-export function resolveCodexReasoningEffort(env = process.env) {
-  const value = (env.ETWIN_CODEX_REASONING_EFFORT || DEFAULT_CODEX_REASONING_EFFORT).toLowerCase();
-  return ["low", "medium", "high", "xhigh"].includes(value) ? value : DEFAULT_CODEX_REASONING_EFFORT;
+export function resolveCodexReasoningEffort(env = process.env, toolMode = null) {
+  const allowed = ["low", "medium", "high", "xhigh"];
+  const pick = (raw, fallback) => {
+    const value = String(raw || fallback).toLowerCase();
+    return allowed.includes(value) ? value : fallback;
+  };
+  if (toolMode) {
+    const mode = normalizeToolMode(toolMode);
+    if (mode === TOOL_MODE_CHAT) {
+      return pick(env.ETWIN_CODEX_CHAT_REASONING_EFFORT || env.ETWIN_CODEX_REASONING_EFFORT, DEFAULT_CODEX_CHAT_REASONING_EFFORT);
+    }
+    if (mode === TOOL_MODE_FULL) {
+      return pick(env.ETWIN_CODEX_FULL_REASONING_EFFORT || env.ETWIN_CODEX_REASONING_EFFORT, DEFAULT_CODEX_FULL_REASONING_EFFORT);
+    }
+  }
+  return pick(env.ETWIN_CODEX_REASONING_EFFORT, DEFAULT_CODEX_REASONING_EFFORT);
 }
 
 export function shouldIgnoreCodexUserConfig(toolMode = TOOL_MODE_CHAT, env = process.env) {
@@ -349,7 +364,7 @@ async function callCodexExec(userPrompt, opts = {}) {
   const sandbox = resolveCodexSandbox(toolMode);
   const timeoutMs = resolveCodexTimeoutMs(process.env, toolMode);
   const maxAttempts = resolveCodexMaxAttempts(kind, toolMode);
-  const reasoningEffort = resolveCodexReasoningEffort();
+  const reasoningEffort = resolveCodexReasoningEffort(process.env, toolMode);
   const serviceTier = resolveCodexServiceTier();
   const images = (opts.images || []).filter((imagePath) => imagePath && existsSync(imagePath));
 
