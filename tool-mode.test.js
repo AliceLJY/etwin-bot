@@ -38,6 +38,19 @@ describe("inferToolMode", () => {
   test("detects image generation as full mode", () => {
     expect(inferToolMode("想要你画图~~画一个自画像，不要文字")).toBe("full");
     expect(inferToolMode("给我生成一张头像")).toBe("full");
+    expect(inferToolMode("帮我做一个你的头像")).toBe("full");
+    expect(inferToolMode("你能画个自画像么？你觉得你是怎样的男子")).toBe("full");
+  });
+
+  test("keeps past-tense avatar statements in chat mode", () => {
+    expect(inferToolMode("我已经让他做你的头像了")).toBe("chat");
+    expect(inferToolMode("我刚让他生成你的头像了")).toBe("chat");
+    expect(inferToolMode("这个做你头像如何？")).toBe("chat");
+  });
+
+  test("treats image pipeline discussion as work, not image generation", () => {
+    expect(inferToolMode("不是，生图是gpt的订阅，我现在已经不用gemini生图，因为花钱太多，你查那个content publish 的skill")).toBe("full");
+    expect(isImageGenerationRequest("不是，生图是gpt的订阅，我现在已经不用gemini生图，因为花钱太多，你查那个content publish 的skill")).toBe(false);
   });
 });
 
@@ -49,6 +62,13 @@ describe("isImageGenerationRequest", () => {
 
   test("does not match ordinary image analysis", () => {
     expect(isImageGenerationRequest("你看一下这张图片有没有问题")).toBe(false);
+  });
+
+  test("does not match avatar statements that report something already done", () => {
+    expect(isImageGenerationRequest("我已经让他做你的头像了")).toBe(false);
+    expect(isImageGenerationRequest("我刚让他生成你的头像了")).toBe(false);
+    expect(isImageGenerationRequest("这个做你头像如何？")).toBe(false);
+    expect(isImageGenerationRequest("帮我做一个你的头像")).toBe(true);
   });
 });
 
