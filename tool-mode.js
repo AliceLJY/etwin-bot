@@ -15,6 +15,20 @@ const IMAGE_GENERATION_PATTERNS = [
   /(?:画|生成|做|出).*(?:头像|自画像|插画|封面|图片|图)/i,
 ];
 
+const IMAGE_FOLLOWUP_PATTERNS = [
+  /^(?:图呢|图片呢|画呢|画好了吗|画好了么|好了?吗|出图了吗|还没出吗|怎么还没出)/i,
+  /^(?:开干|来|来吧|继续|可以|整|开始|发|试试|冲)[!！~～。.\s]*$/i,
+  /(?:刚才|上一张|上张|这张|那个图|这图).*(?:不对|不合适|重画|重新画|换成|改成|调整|再来)/i,
+  /(?:不对|不合适|重画|重新画|换成|改成|调整|再来).*(?:图|图片|头像|自画像|风格|样子|帅哥|男|女)/i,
+  /(?:我要|想要|改成|换成).*(?:帅哥|男生|男性|男人|哥哥|女生|女性|女人|姐姐)/i,
+  /(?:我要|想要|改成|换成).*(?:中国人|华人|东亚|亚洲人|真人|真实感|照片感|不假)/i,
+  /(?:重画|重新画|再来|调整|改|换).*(?:真实|真人|中国人|华人|东亚|亚洲人|年轻|帅|不假)/i,
+  /(?:这张|这个|现在这个|上一张|刚才|画面|脸|年龄|风格|人种|发型|眼神|衣服|气质).*(?:太|不|像|要|不要|换|改|成熟|年轻|大叔|中国人|亚洲人|帅|油)/i,
+  /(?:能|可以).*(?:中国人|亚洲人|年轻|帅哥|男生|男性|真人|少年感|不成熟|不要大叔)/i,
+  /(?:不要|别|不想要).*(?:大叔|成熟|老|油|欧美|外国|女|女性|文字|赛博)/i,
+  /(?:太).*(?:成熟|老|大叔|油|欧美|外国|女|女性)/i,
+];
+
 function normalizeMode(value, fallback = TOOL_MODE_AUTO) {
   const mode = String(value || "").trim().toLowerCase();
   return [TOOL_MODE_AUTO, TOOL_MODE_CHAT, TOOL_MODE_FULL].includes(mode) ? mode : fallback;
@@ -40,6 +54,10 @@ export function inferToolMode(message = "") {
 
 export function isImageGenerationRequest(message = "") {
   return IMAGE_GENERATION_PATTERNS.some((pattern) => pattern.test(message));
+}
+
+export function isImageFollowupRequest(message = "") {
+  return IMAGE_FOLLOWUP_PATTERNS.some((pattern) => pattern.test(message));
 }
 
 export function resolveToolMode(message = "", env = process.env) {
