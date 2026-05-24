@@ -274,7 +274,13 @@ export function buildSystemPrompt(toolMode = TOOL_MODE_FULL) {
   return `${personaPrompt}${memorySection}${discipline}`;
 }
 
-function codexPrompt(userPrompt, kind, toolMode) {
+export function codexPrompt(userPrompt, kind, toolMode) {
+  const mode = normalizeToolMode(toolMode);
+  const outputConstraints = kind === "self-loop"
+    ? `只输出 self-decision prompt 要求的严格 JSON 对象。不要 markdown，不要解释，不要把消息正文单独抽出来。`
+    : `只输出要发给 Alice 的内容。不要解释你用了什么工具，不要写 markdown 标题，不要包 JSON。
+如果这是 reactive 聊天，用双换行分成 1-5 条自然 Telegram 消息。`;
+
   return `${buildSystemPrompt(toolMode)}
 
 ---
@@ -283,7 +289,7 @@ function codexPrompt(userPrompt, kind, toolMode) {
 
 - backend: codex
 - kind: ${kind}
-- task_intent: ${toolMode === TOOL_MODE_FULL ? "work-with-tools-if-needed" : "conversation"}
+- task_intent: ${mode === TOOL_MODE_FULL ? "work-with-tools-if-needed" : "conversation"}
 
 ${userPrompt}
 
@@ -291,8 +297,7 @@ ${userPrompt}
 
 # 输出约束
 
-只输出要发给 Alice 的内容。不要解释你用了什么工具，不要写 markdown 标题，不要包 JSON。
-如果这是 reactive 聊天，用双换行分成 1-5 条自然 Telegram 消息。`;
+${outputConstraints}`;
 }
 
 function spawnCodex(args, input, timeoutMs) {

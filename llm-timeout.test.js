@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "fs";
+import { join } from "path";
 import {
   DEFAULT_CLAUDE_REACTIVE_MAX_TURNS,
   DEFAULT_CLAUDE_SELF_LOOP_MAX_TURNS,
@@ -9,6 +11,7 @@ import {
   DEFAULT_CODEX_SERVICE_TIER,
   DEFAULT_CODEX_TIMEOUT_MS,
   buildSystemPrompt,
+  codexPrompt,
   resolveClaudeMaxTurns,
   resolveCodexMaxAttempts,
   resolveCodexReasoningEffort,
@@ -172,5 +175,24 @@ describe("buildSystemPrompt", () => {
     expect(fullPrompt).toContain("操作纪律");
     expect(fullPrompt).toContain("Self-Healing");
     expect(chatPrompt.length).toBeLessThan(fullPrompt.length);
+  });
+});
+
+describe("codexPrompt", () => {
+  test("keeps self-loop JSON output constraints instead of Telegram text constraints", () => {
+    const prompt = codexPrompt('{"action":"ping"}', "self-loop", "chat");
+
+    expect(prompt).toContain("严格 JSON");
+    expect(prompt).not.toContain("不要包 JSON");
+  });
+});
+
+describe("Codex self-loop prompt", () => {
+  test("allows light proactive pings instead of defaulting to silent", () => {
+    const prompt = readFileSync(join(import.meta.dir, "prompts/self-decision-codex.md"), "utf-8");
+
+    expect(prompt).toContain("默认可以 ping");
+    expect(prompt).not.toContain("默认 silent");
+    expect(prompt).not.toContain("24 小时内已经 ping 过");
   });
 });
