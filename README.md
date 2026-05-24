@@ -107,7 +107,7 @@ bash start.sh
 当前支持两种实例：
 
 - `com.etwin-bot`：原 CC 版，使用 `.env`，保留 proactive。
-- `com.etwin-codex-bot`：Codex 版，使用 `.env.codex`，第一版 `ETWIN_PROACTIVE=false`，只 reactive。
+- `com.etwin-codex-bot`：Codex 版，使用 `.env.codex`，保留轻心跳；主动关心走 chat/self-loop，工具和图片只在明确请求时进入 full/image 链路。
 - Codex 版收到 TG 图片时会先存入 `files-codex/`，再通过 `codex exec --image <path>` 传给后端；无 caption 的图片会暂存到下一条文字一起处理。
 
 Codex 版关键 env：
@@ -119,8 +119,9 @@ ETWIN_LLM_BACKEND=codex
 ETWIN_REPLY_PROMPT=prompts/reply-codex.md
 ETWIN_DATA_DIR=data-codex
 ETWIN_FILE_DIR=files-codex
-ETWIN_PROACTIVE=false
+ETWIN_PROACTIVE=true
 ETWIN_RUN_ON_START=false
+ETWIN_SELF_PROMPT=prompts/self-decision-codex.md
 ```
 
 启动 dev 实例：
