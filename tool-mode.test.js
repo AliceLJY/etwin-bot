@@ -30,9 +30,16 @@ describe("inferToolMode", () => {
 
   test("detects explicit work requests", () => {
     expect(inferToolMode("帮我看一下这个报错")).toBe("full");
+    expect(inferToolMode("帮我看这个仓库")).toBe("full");
     expect(inferToolMode("你跑一下测试")).toBe("full");
     expect(inferToolMode("重启 bot")).toBe("full");
     expect(inferToolMode("这个有问题吗\n\n[上条图片文件: /tmp/photo.jpg]")).toBe("full");
+  });
+
+  test("treats direct look/open follow-ups as work requests", () => {
+    expect(inferToolMode("直接看啊")).toBe("full");
+    expect(inferToolMode("直接打开")).toBe("full");
+    expect(inferToolMode("你现在看一下能看么")).toBe("full");
   });
 
   test("detects image generation as full mode", () => {
