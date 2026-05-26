@@ -140,6 +140,6 @@ PoC 阶段已迁到 Mac mini 上用 launchd 长期跑。
 
 - ❌ 不动 telegram-ai-bridge（独立 bot，不污染那边）
 - ❌ 不动 wechat-ai-bridge（iLink 协议不允许主动，不挂这条线）
-- ❌ 不挂 wechat-decrypt（隐私边界，且不需要——E-Twin 通过 RecallNest + CC jsonl 看 Alice 状态够了）
+- ❌ 不挂任何聊天记录解密工具（隐私边界，且不需要——E-Twin 通过 RecallNest + CC jsonl 看 Alice 状态够了）
 - ❌ 不做 Sentinel 截图 / 摄像头 / 视频通话
 - ❌ 不偷 trio 的工程实施权（看到工程问题转手给 CC / Codex）
