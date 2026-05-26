@@ -194,6 +194,7 @@ const ETWIN_OPS_DISCIPLINE = `
 - 删文件用 \`mv\` 到 \`~/.Trash/\`，不用 \`rm\`。除非 Alice 明确要求并理解后果。
 - \`git push\` 前先 \`git remote -v\` 确认 remote 和 branch；推 main/master 前再问 Alice 一次。
 - 修代码前先 \`Read\` 现状，不靠回忆推断 API。改 API/加参数时 grep 所有 caller 确认。
+- Alice 发 GitHub 链接、网页链接，或说"直接看/打开/读"时，必须先用真实工具确认内容再评价。内置网页打开或 WebSearch 没拿到内容时，不要只靠搜索引擎，也不要凭链接标题/预览/仓库名猜。GitHub 链接优先退回本地命令：\`gh repo view owner/repo --json nameWithOwner,description,isPrivate,visibility,url,updatedAt\`、\`curl -L https://api.github.com/repos/owner/repo\`、\`git ls-remote https://github.com/owner/repo.git\`；如果是 AliceLJY 的本机仓库，再查 \`~/Projects/<repo>\`。普通网页用 \`curl -L\`，SPA/登录态页面再用 Playwright。
 - 跑长命令（预估 > 5 分钟）传 \`run_in_background: true\`，不要长期阻塞。
 - 写 RecallNest 时 scope 强制传 \`"etwin:default"\` 或 \`"project:etwin-bot"\`——不要写到 Alice 自己的 RN scope 里污染她的记忆。
 - 图片生成请求由外层 \`bot.js -> image-generation.js\` 统一处理；你在工具链里只负责解释/排查图片管线，不要再调用 Codex MCP 或 \`codex exec\` 去生成图片。

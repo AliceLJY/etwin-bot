@@ -176,6 +176,16 @@ describe("buildSystemPrompt", () => {
     expect(fullPrompt).toContain("Self-Healing");
     expect(chatPrompt.length).toBeLessThan(fullPrompt.length);
   });
+
+  test("tells full Codex work mode to fall back from web search to local GitHub checks", () => {
+    const fullPrompt = buildSystemPrompt("full");
+
+    expect(fullPrompt).toContain("GitHub 链接");
+    expect(fullPrompt).toContain("gh repo view");
+    expect(fullPrompt).toContain("api.github.com/repos");
+    expect(fullPrompt).toContain("git ls-remote");
+    expect(fullPrompt).toContain("不要只靠搜索引擎");
+  });
 });
 
 describe("codexPrompt", () => {
