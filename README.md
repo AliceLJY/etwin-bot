@@ -134,7 +134,7 @@ launchd 模板见 `deploy/com.etwin-codex-bot.plist.template`。
 
 ## 部署位置
 
-PoC 阶段已迁到 Mac mini 上用 launchd 长期跑。
+部署在 Mac mini 上，用 launchd 长期跑（双实例：Claude + Codex）。
 
 ## 不做什么
 
