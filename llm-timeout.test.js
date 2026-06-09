@@ -165,6 +165,23 @@ describe("resolveClaudeMaxTurns", () => {
   });
 });
 
+describe("DEFAULT_CLAUDE_MODEL", () => {
+  test("uses the Opus alias instead of pinning an old point release", async () => {
+    const mod = await import("./llm.js");
+
+    expect(mod.DEFAULT_CLAUDE_MODEL).toBe("opus");
+  });
+});
+
+describe("shouldUseClaudeFreshSession", () => {
+  test("uses fresh Claude sessions for self-loop while keeping reactive resumable", async () => {
+    const mod = await import("./llm.js");
+
+    expect(mod.shouldUseClaudeFreshSession("self-loop", {})).toBe(true);
+    expect(mod.shouldUseClaudeFreshSession("reactive", {})).toBe(false);
+  });
+});
+
 describe("buildSystemPrompt", () => {
   test("keeps chat prompt lighter than full work prompt", () => {
     const chatPrompt = buildSystemPrompt("chat");

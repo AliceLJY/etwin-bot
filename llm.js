@@ -20,6 +20,7 @@ export const DEFAULT_CODEX_REASONING_EFFORT = "medium";
 export const DEFAULT_CODEX_CHAT_REASONING_EFFORT = "medium";
 export const DEFAULT_CODEX_FULL_REASONING_EFFORT = "high";
 export const DEFAULT_CODEX_SERVICE_TIER = "fast";
+export const DEFAULT_CLAUDE_MODEL = "opus";
 export const DEFAULT_CLAUDE_SELF_LOOP_MAX_TURNS = 1;
 export const DEFAULT_CLAUDE_REACTIVE_MAX_TURNS = 30;
 
@@ -101,11 +102,15 @@ export function resolveClaudeMaxTurns(kind = "reactive", env = process.env) {
   return parsePositiveInteger(env.ETWIN_CLAUDE_REACTIVE_MAX_TURNS, DEFAULT_CLAUDE_REACTIVE_MAX_TURNS);
 }
 
+export function shouldUseClaudeFreshSession(kind = "reactive", opts = {}) {
+  return opts.fresh === true || kind === "self-loop";
+}
+
 // SDK 0.2.117+ 砍掉了内置 cli.js，必须显式传 claude CLI 路径
 const CLAUDE_CLI_PATH =
   process.env.CLAUDE_CLI_PATH || join(homedir(), ".local/bin/claude");
 
-const LLM_MODEL = process.env.ETWIN_LLM_MODEL || "claude-sonnet-4-6";
+const LLM_MODEL = process.env.ETWIN_LLM_MODEL || DEFAULT_CLAUDE_MODEL;
 const LLM_EFFORT = process.env.ETWIN_LLM_EFFORT || null; // 不指定走默认
 const LLM_BACKEND = process.env.ETWIN_LLM_BACKEND || process.env.ETWIN_LLM_MODE || "claude";
 const ENABLE_CODEX_MCP = process.env.ETWIN_ENABLE_CODEX_MCP === "true";
@@ -475,7 +480,8 @@ export async function callClaudeSDK(userPrompt, opts = {}) {
     return "[dry-run] 当前是 dry-run 模式，未真调 SDK。";
   }
 
-  const resumeId = opts.fresh ? null : loadSessionId(kind);
+  const freshSession = shouldUseClaudeFreshSession(kind, opts);
+  const resumeId = freshSession ? null : loadSessionId(kind);
   const useFullTools = toolMode === TOOL_MODE_FULL;
 
   const sdkOptions = {
@@ -537,7 +543,7 @@ export async function callClaudeSDK(userPrompt, opts = {}) {
     throw err;
   }
 
-  if (observedSessionId && observedSessionId !== resumeId) {
+  if (!freshSession && observedSessionId && observedSessionId !== resumeId) {
     saveSessionId(kind, observedSessionId);
     console.log(`[llm] saved session_id kind=${kind} sid=${observedSessionId.slice(0, 8)}`);
   }
