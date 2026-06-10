@@ -1,6 +1,6 @@
 // paths.js — runtime paths shared by all etwin-bot modules
 
-import { mkdirSync } from "fs";
+import { existsSync, mkdirSync, readFileSync } from "fs";
 import { isAbsolute, join, resolve } from "path";
 
 export const PROJECT_DIR = import.meta.dir;
@@ -28,4 +28,12 @@ export function ensureRuntimeDirs() {
 
 export function dataPath(name) {
   return join(DATA_DIR, name);
+}
+
+// persona/prompt 模板的本地覆盖机制：foo.md 旁若存在 foo.local.md（gitignore，不入公开仓），
+// 优先用本地版——私人化调节内容留在本机，仓库只保留中性模板
+export function readPromptFile(absPath) {
+  const localPath = absPath.replace(/\.md$/, ".local.md");
+  if (existsSync(localPath)) return readFileSync(localPath, "utf-8");
+  return readFileSync(absPath, "utf-8");
 }
