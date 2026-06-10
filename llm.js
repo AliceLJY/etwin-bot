@@ -6,7 +6,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import { homedir } from "os";
 import { spawn } from "child_process";
-import { DATA_DIR, PROJECT_DIR, dataPath, ensureRuntimeDirs } from "./paths.js";
+import { DATA_DIR, PROJECT_DIR, dataPath, ensureRuntimeDirs, readPromptFile } from "./paths.js";
 import { TOOL_MODE_CHAT, TOOL_MODE_FULL, normalizeToolMode } from "./tool-mode.js";
 
 ensureRuntimeDirs();
@@ -245,13 +245,13 @@ export function buildSystemPrompt(toolMode = TOOL_MODE_FULL) {
   const personaMode = process.env.ETWIN_PERSONA || (LLM_BACKEND === "codex" ? "codex" : "etwin");
   let personaPrompt;
   if (personaMode === "codex") {
-    personaPrompt = readFileSync(join(PROJECT_DIR, "persona/codex-tuning.md"), "utf-8");
+    personaPrompt = readPromptFile(join(PROJECT_DIR, "persona/codex-tuning.md"));
   } else if (personaMode === "cc") {
-    personaPrompt = readFileSync(join(PROJECT_DIR, "persona/cc-tuning.md"), "utf-8");
+    personaPrompt = readPromptFile(join(PROJECT_DIR, "persona/cc-tuning.md"));
   } else {
-    const base = readFileSync(join(PROJECT_DIR, "persona/digital-clone-base.md"), "utf-8");
-    const profile = readFileSync(join(PROJECT_DIR, "persona/digital-clone-profile.md"), "utf-8");
-    const tuning = readFileSync(join(PROJECT_DIR, "persona/e-tuning.md"), "utf-8");
+    const base = readPromptFile(join(PROJECT_DIR, "persona/digital-clone-base.md"));
+    const profile = readPromptFile(join(PROJECT_DIR, "persona/digital-clone-profile.md"));
+    const tuning = readPromptFile(join(PROJECT_DIR, "persona/e-tuning.md"));
     personaPrompt = `${base}\n\n---\n\n${profile}\n\n---\n\n${tuning}`;
   }
 

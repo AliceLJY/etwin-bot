@@ -5,7 +5,7 @@ import { readFileSync, writeFileSync, existsSync } from "fs";
 import { join } from "path";
 import { gatherContext, loadActionLog, recentActions, interactionStats } from "./context.js";
 import { callMiniCC, parseDecisionJSON } from "./llm.js";
-import { PROJECT_DIR, dataPath, ensureRuntimeDirs } from "./paths.js";
+import { PROJECT_DIR, dataPath, ensureRuntimeDirs, readPromptFile } from "./paths.js";
 
 ensureRuntimeDirs();
 
@@ -33,7 +33,7 @@ export async function selfTick({ sendMessage, dryRun = false } = {}) {
   const stats7d = interactionStats(7);
 
   // 拼 user prompt（system prompt 在 llm.js 里 buildSystemPrompt 拼好）
-  const template = readFileSync(SELF_DECISION_PROMPT_PATH, "utf-8");
+  const template = readPromptFile(SELF_DECISION_PROMPT_PATH);
   const userPrompt = template
     .replace("{{context_json}}", JSON.stringify(context, null, 2))
     .replace("{{action_log_json}}", JSON.stringify(actionLog48h, null, 2))

@@ -18,3 +18,7 @@ data-codex/
 files/
 files-*/
 .playwright-mcp/
+
+# 私人化 persona/prompt 调节层（运行时优先加载 .local.md，公开仓只留中性模板）
+persona/*.local.md
+prompts/*.local.md

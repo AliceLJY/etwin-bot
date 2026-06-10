@@ -20,7 +20,7 @@ Alice 的 E-Twin —— 数字分身的**外向化镜像**。
                          │
                          ▼
                   ┌──────────────┐
-                  │ self-loop.js │ 每 30 分钟自驱醒来一次
+                  │ self-loop.js │ 每 4 小时自驱醒来一次
                   │  (interval)  │ → LLM 决定 ping/silent
                   └──────┬───────┘
                          │
@@ -48,6 +48,9 @@ etwin-bot/
 │   ├── digital-clone-base.md     symlink → ~/.claude/skills/digital-clone/clone-workspace/system-prompt.md
 │   ├── digital-clone-profile.md  symlink → 同上 persona.md
 │   └── e-tuning.md           E 化调节层（这个 bot 独有的人格调节）
+│   （注：persona/prompts 下任意 foo.md 旁可放 foo.local.md 本地覆盖版，gitignore 不入仓、
+│    运行时优先加载——私人化调节放本地，仓库只留中性模板。默认 etwin 人格依赖上面两个
+│    symlink 的本地目标文件，干净 clone 需自备或改用 ETWIN_PERSONA=cc / codex）
 ├── prompts/
 │   ├── self-decision.md      self-loop 用的判断 prompt（输出 JSON）
 │   └── reply.md              Alice ping bot 时用的对话 prompt（输出自然中文）
