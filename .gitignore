@@ -22,3 +22,6 @@ files-*/
 # 私人化 persona/prompt 调节层（运行时优先加载 .local.md，公开仓只留中性模板）
 persona/*.local.md
 prompts/*.local.md
+
+# 一次性个人脚本（硬编码个人 prompt + 本地绝对路径，不入公开仓）
+gen-self-portrait.js
