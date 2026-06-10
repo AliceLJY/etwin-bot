@@ -117,13 +117,17 @@ export async function runDistill() {
     writeFileSync(archivePath, JSON.stringify(toCompress, null, 2));
     console.log(`[distill] 归档 → ${archivePath}`);
 
-    // 截短 conversation-history 保留最近 N 条。
-    // 写回前重读：LLM 压缩期间（数十秒窗口）handler 可能已 append 新轮，
-    // 直接写快照会把新轮覆盖丢掉——handler 只会尾部追加，超出快照长度的部分原样保留
+    // 截短 conversation-history：写回前重读，保留 toCompress 截止时间之后的全部条目。
+    // 不能用长度差判断新增——saveHistory 有 slice(-60) 上限，窗口期 append 后长度可能不变
+    // （codex 复核抓出）。time 游标对 cap 截断免疫：cutoff 之后的 = 原 recent + 窗口期新增。
+    const cutoffTime = toCompress.length > 0 ? toCompress[toCompress.length - 1].time : null;
     const current = loadConversationHistory();
-    const appendedDuringDistill = current.length > history.length ? current.slice(history.length) : [];
-    writeFileSync(CONV_HISTORY, JSON.stringify([...recent, ...appendedDuringDistill], null, 2));
-    console.log(`[distill] conversation-history 截短到最近 ${recent.length} 条${appendedDuringDistill.length ? `（保留 distill 期间新增 ${appendedDuringDistill.length} 条）` : ""}`);
+    const keep = cutoffTime
+      ? current.filter((m) => !m.time || m.time > cutoffTime)
+      : current;
+    writeFileSync(CONV_HISTORY, JSON.stringify(keep, null, 2));
+    const appendedCount = Math.max(0, keep.length - recent.length);
+    console.log(`[distill] conversation-history 截短到 ${keep.length} 条${appendedCount ? `（含 distill 期间新增约 ${appendedCount} 条）` : ""}`);
 
     // append 新 memory
     const now = new Date().toISOString();
