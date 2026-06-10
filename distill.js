@@ -117,9 +117,13 @@ export async function runDistill() {
     writeFileSync(archivePath, JSON.stringify(toCompress, null, 2));
     console.log(`[distill] 归档 → ${archivePath}`);
 
-    // 截短 conversation-history 保留最近 N 条
-    writeFileSync(CONV_HISTORY, JSON.stringify(recent, null, 2));
-    console.log(`[distill] conversation-history 截短到最近 ${recent.length} 条`);
+    // 截短 conversation-history 保留最近 N 条。
+    // 写回前重读：LLM 压缩期间（数十秒窗口）handler 可能已 append 新轮，
+    // 直接写快照会把新轮覆盖丢掉——handler 只会尾部追加，超出快照长度的部分原样保留
+    const current = loadConversationHistory();
+    const appendedDuringDistill = current.length > history.length ? current.slice(history.length) : [];
+    writeFileSync(CONV_HISTORY, JSON.stringify([...recent, ...appendedDuringDistill], null, 2));
+    console.log(`[distill] conversation-history 截短到最近 ${recent.length} 条${appendedDuringDistill.length ? `（保留 distill 期间新增 ${appendedDuringDistill.length} 条）` : ""}`);
 
     // append 新 memory
     const now = new Date().toISOString();
