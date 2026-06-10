@@ -5,6 +5,7 @@ import { join } from "path";
 import { execFileSync } from "child_process";
 import { homedir } from "os";
 import { dataPath, ensureRuntimeDirs } from "./paths.js";
+import { computeInteractionStats } from "./interaction.js";
 
 ensureRuntimeDirs();
 
@@ -41,26 +42,9 @@ export function recentActions(hours = 48) {
   return log.filter((a) => new Date(a.time).getTime() > cutoff);
 }
 
-// 算 Alice 互动率（基于 alice_reaction 字段）
+// 算 Alice 互动率（纯逻辑在 interaction.js，这里只负责读 action-log）
 export function interactionStats(days = 7) {
-  const log = loadActionLog();
-  const cutoff = Date.now() - days * 86400_000;
-  const pings = log.filter(
-    (a) => a.action === "ping" && new Date(a.time).getTime() > cutoff,
-  );
-  if (pings.length === 0) {
-    return { total: 0, engaged: 0, delayed: 0, seen_no_reply: 0, unread: 0, engagement_rate: null };
-  }
-  const counts = { engaged: 0, delayed: 0, seen_no_reply: 0, unread: 0 };
-  for (const p of pings) {
-    const r = p.alice_reaction || "unread";
-    if (counts[r] !== undefined) counts[r]++;
-  }
-  return {
-    total: pings.length,
-    ...counts,
-    engagement_rate: ((counts.engaged + counts.delayed) / pings.length).toFixed(2),
-  };
+  return computeInteractionStats(loadActionLog(), days);
 }
 
 // Alice 最后一次和 CC 对话的时间（扫 ~/.claude/projects/-Users-anxianjingya/*.jsonl 最新 mtime）

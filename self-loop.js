@@ -6,6 +6,7 @@ import { join } from "path";
 import { gatherContext, loadActionLog, recentActions, interactionStats } from "./context.js";
 import { callMiniCC, parseDecisionJSON } from "./llm.js";
 import { PROJECT_DIR, dataPath, ensureRuntimeDirs, readPromptFile } from "./paths.js";
+import { classifyReactionDelay, activeQuietUntil } from "./interaction.js";
 
 ensureRuntimeDirs();
 
@@ -26,8 +27,27 @@ function appendAction(action) {
   writeFileSync(ACTION_LOG, JSON.stringify(log, null, 2));
 }
 
+// /quiet 落 action-log：command 不进 conversation-history，self-decision prompt 的
+// "看 recent_conversation 里的 /quiet" 规则永远看不到它——必须写成结构化记录
+export function recordQuietRequest(hours = 24) {
+  appendAction({
+    time: new Date().toISOString(),
+    action: "quiet_request",
+    quiet_until: new Date(Date.now() + hours * 3600_000).toISOString(),
+    reasoning: `Alice 手动 /quiet，请安静 ${hours} 小时`,
+  });
+}
+
+
 // 单次自我醒来：收 context → 喂 LLM → 拿决策 → 执行
 export async function selfTick({ sendMessage, dryRun = false } = {}) {
+  // 硬保证：Alice 手动 /quiet 未过期 → 直接 silent，不调 LLM（确定性 + 省 token）
+  const quietUntil = activeQuietUntil(loadActionLog());
+  if (quietUntil) {
+    console.log(`[self-loop] 处于 /quiet 静默期至 ${quietUntil}，跳过本次 tick`);
+    return null;
+  }
+
   const context = await gatherContext();
   const actionLog48h = recentActions(48);
   const stats7d = interactionStats(7);
@@ -153,23 +173,26 @@ export function startSelfLoop({ sendMessage, dryRun = false, runOnStart = true }
   }, WAKE_INTERVAL_MS);
 }
 
-// 标记某条 ping 的 Alice 反应（由 bot.js on:message handler 调用）
-export function markAliceReaction({ withinHours = 24 } = {}, reaction) {
+// 标记某条 ping 的 Alice 反应（由 bot.js handleMessage 调用）。
+// 反应等级按"她回得多快"自动判定，而非一律 engaged——让 interactionStats 拿到真数据。
+export function markAliceReaction({ withinHours = 24 } = {}) {
   let log = [];
   if (existsSync(ACTION_LOG)) {
     try { log = JSON.parse(readFileSync(ACTION_LOG, "utf-8")); } catch (_) {}
   }
-  const cutoff = Date.now() - withinHours * 3600_000;
+  const now = Date.now();
+  const cutoff = now - withinHours * 3600_000;
   // 找最近一条 ping 且 reaction 还是 unread 的
   for (let i = log.length - 1; i >= 0; i--) {
     const a = log[i];
     if (a.action !== "ping") continue;
-    if (new Date(a.time).getTime() < cutoff) break;
+    const pingTime = new Date(a.time).getTime();
+    if (pingTime < cutoff) break;
     if (a.alice_reaction === "unread") {
-      a.alice_reaction = reaction;
+      a.alice_reaction = classifyReactionDelay(now - pingTime);
       writeFileSync(ACTION_LOG, JSON.stringify(log, null, 2));
-      return true;
+      return a.alice_reaction;
     }
   }
-  return false;
+  return null;
 }

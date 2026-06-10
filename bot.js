@@ -10,7 +10,7 @@ import { spawn } from "child_process";
 import { callMiniCC } from "./llm.js";
 import { generateTelegramImage } from "./image-generation.js";
 import { gatherContext } from "./context.js";
-import { startSelfLoop, markAliceReaction } from "./self-loop.js";
+import { startSelfLoop, markAliceReaction, recordQuietRequest } from "./self-loop.js";
 import { shouldDistill, runDistill } from "./distill.js";
 import { FILE_DIR, INSTANCE_ID, PROJECT_DIR, dataPath, ensureRuntimeDirs, readPromptFile } from "./paths.js";
 import { splitMessages } from "./message-split.js";
@@ -306,12 +306,13 @@ bot.command("start", async (ctx) => {
   console.log(`[bot] 收到 /start chat_id=${ctx.chat.id}`);
 });
 
-// /quiet 命令：紧急静默（虽然 LLM 自己会判断，但留个手动 escape）
+// /quiet 命令：紧急静默。写一条 quiet_request 进 action-log——
+// selfTick 下次醒来会硬拦截（不调 LLM 直接 silent），不再是只回一句空话的假按钮。
 bot.command("quiet", async (ctx) => {
   if (!ALICE_CHAT_ID || String(ctx.chat.id) !== String(ALICE_CHAT_ID)) return;
-  await ctx.reply("好。我安静一会儿。");
-  // 写一条 silent_override action，让 LLM 下次醒来看到
-  console.log(`[bot] /quiet from chat ${ctx.chat.id}`);
+  recordQuietRequest(24);
+  await ctx.reply("好。我安静一会儿，24 小时内不主动找你；你随时叫我就回来。");
+  console.log(`[bot] /quiet from chat ${ctx.chat.id} → 静默 24h 已记入 action-log`);
 });
 
 // 图片：下载到本地；有 caption 立即处理，无 caption 等 Alice 下一条文字一起看
@@ -410,8 +411,8 @@ bot.on("message:sticker", async (ctx) => {
 
 // 统一处理（reply.md 路径），text/photo/document/voice 都走这里
 async function handleMessage(ctx, userMsg, opts = {}) {
-  // 更新 self-loop 的 alice_reaction
-  markAliceReaction({ withinHours: 24 }, "engaged");
+  // 更新 self-loop 的 alice_reaction（按回应延迟自动分级 engaged/delayed）
+  markAliceReaction({ withinHours: 24 });
 
   const toolModeRequest = resolveToolMode(userMsg);
   const normalizedUserMsg = toolModeRequest.message || userMsg;
