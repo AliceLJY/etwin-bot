@@ -12,7 +12,8 @@ import { generateTelegramImage } from "./image-generation.js";
 import { gatherContext } from "./context.js";
 import { startSelfLoop, markAliceReaction } from "./self-loop.js";
 import { shouldDistill, runDistill } from "./distill.js";
-import { FILE_DIR, INSTANCE_ID, PROJECT_DIR, dataPath, ensureRuntimeDirs } from "./paths.js";
+import { FILE_DIR, INSTANCE_ID, PROJECT_DIR, dataPath, ensureRuntimeDirs, readPromptFile } from "./paths.js";
+import { splitMessages } from "./message-split.js";
 import { TOOL_MODE_FULL, isImageFollowupRequest, isImageGenerationRequest, resolveToolMode } from "./tool-mode.js";
 
 // 下载 TG 文件到本地（参考 telegram-ai-bridge bridge.js downloadFile）
@@ -91,11 +92,6 @@ function friendlyErrorReply(e, displayName) {
 }
 
 // 把 LLM 输出按双换行切成多条 TG 消息
-function splitMessages(text) {
-  if (!text) return [];
-  return text.split(/\n{2,}/).map((s) => s.trim()).filter((s) => s.length > 0);
-}
-
 // 模拟真人节奏：typing indicator + 段间延迟逐条发
 async function sendAsMulti({ bot, chatId, text }) {
   const segments = splitMessages(text);
@@ -191,7 +187,13 @@ if (!TG_BOT_TOKEN) {
   process.exit(1);
 }
 if (!ALICE_CHAT_ID) {
-  console.error("❌ 缺 ALICE_CHAT_ID env，先 /start 给 bot 一次，看 stderr 拿你的 chat ID");
+  // fail-closed：full 工具模式 + bypassPermissions 下，未锁定聊天对象等于把本机 shell 开给任何 TG 用户
+  if (DRY_RUN) {
+    console.error("⚠️ 缺 ALICE_CHAT_ID env（dry-run 继续跑：给 bot 发 /start 拿 chat ID，填入 env 后正式启动）");
+  } else {
+    console.error("❌ 缺 ALICE_CHAT_ID env，拒绝启动。先 ETWIN_DRY_RUN=true 起 bot，/start 拿 chat ID 填进 env 再来。");
+    process.exit(1);
+  }
 }
 
 // 维护对话历史（最近 N 轮）
@@ -306,6 +308,7 @@ bot.command("start", async (ctx) => {
 
 // /quiet 命令：紧急静默（虽然 LLM 自己会判断，但留个手动 escape）
 bot.command("quiet", async (ctx) => {
+  if (!ALICE_CHAT_ID || String(ctx.chat.id) !== String(ALICE_CHAT_ID)) return;
   await ctx.reply("好。我安静一会儿。");
   // 写一条 silent_override action，让 LLM 下次醒来看到
   console.log(`[bot] /quiet from chat ${ctx.chat.id}`);
@@ -313,7 +316,7 @@ bot.command("quiet", async (ctx) => {
 
 // 图片：下载到本地；有 caption 立即处理，无 caption 等 Alice 下一条文字一起看
 bot.on("message:photo", async (ctx) => {
-  if (ALICE_CHAT_ID && String(ctx.chat.id) !== String(ALICE_CHAT_ID)) return;
+  if (!ALICE_CHAT_ID || String(ctx.chat.id) !== String(ALICE_CHAT_ID)) return;
   const photo = ctx.message.photo;
   const largest = photo[photo.length - 1];
   const caption = ctx.message.caption?.trim() || "";
@@ -333,7 +336,7 @@ bot.on("message:photo", async (ctx) => {
 
 // 文档：同图片处理
 bot.on("message:document", async (ctx) => {
-  if (ALICE_CHAT_ID && String(ctx.chat.id) !== String(ALICE_CHAT_ID)) return;
+  if (!ALICE_CHAT_ID || String(ctx.chat.id) !== String(ALICE_CHAT_ID)) return;
   const doc = ctx.message.document;
   const caption = ctx.message.caption || `看看这个文件: ${doc.file_name}`;
   if (doc.file_size > 20 * 1024 * 1024) {
@@ -352,7 +355,7 @@ bot.on("message:document", async (ctx) => {
 
 // 语音：下载传给 CC，让 CC 用 Read tool 看（CC 能识别音频）
 bot.on("message:voice", async (ctx) => {
-  if (ALICE_CHAT_ID && String(ctx.chat.id) !== String(ALICE_CHAT_ID)) return;
+  if (!ALICE_CHAT_ID || String(ctx.chat.id) !== String(ALICE_CHAT_ID)) return;
   try {
     const localPath = await downloadTGFile(ctx, ctx.message.voice.file_id, "voice.ogg");
     console.log(`[bot] Alice → bot: [voice] ${localPath}`);
@@ -374,7 +377,7 @@ function saveStickerLib(lib) {
 }
 
 bot.on("message:sticker", async (ctx) => {
-  if (ALICE_CHAT_ID && String(ctx.chat.id) !== String(ALICE_CHAT_ID)) return;
+  if (!ALICE_CHAT_ID || String(ctx.chat.id) !== String(ALICE_CHAT_ID)) return;
   const s = ctx.message.sticker;
   const lib = loadStickerLib();
   // 去重：相同 file_unique_id 只记 1 次但增加 used_count
@@ -453,7 +456,7 @@ async function handleMessage(ctx, userMsg, opts = {}) {
     stopStallNotice = startStallNotice(ctx);
 
     const promptContext = await buildReactivePromptContext(toolModeRequest.mode);
-    const template = readFileSync(REPLY_PROMPT_PATH, "utf-8");
+    const template = readPromptFile(REPLY_PROMPT_PATH);
     const recentHistory = history.slice(-REACTIVE_HISTORY_LIMIT);
     const userPrompt = template
       .replace("{{context_json}}", JSON.stringify(promptContext, null, 2))
@@ -498,8 +501,8 @@ async function handleMessage(ctx, userMsg, opts = {}) {
 
 // 所有 text 消息：reactive 对话
 bot.on("message:text", async (ctx) => {
-  // 仅响应 Alice
-  if (ALICE_CHAT_ID && String(ctx.chat.id) !== String(ALICE_CHAT_ID)) {
+  // 仅响应 Alice（fail-closed：ALICE_CHAT_ID 未配置时一律拒绝）
+  if (!ALICE_CHAT_ID || String(ctx.chat.id) !== String(ALICE_CHAT_ID)) {
     console.log(`[bot] 忽略非 Alice 的消息 chat_id=${ctx.chat.id}`);
     return;
   }
