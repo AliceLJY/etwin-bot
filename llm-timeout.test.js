@@ -222,4 +222,11 @@ describe("Codex self-loop prompt", () => {
     expect(prompt).not.toContain("默认 silent");
     expect(prompt).not.toContain("24 小时内已经 ping 过");
   });
+
+  test("does not hard-silence the 7am morning window", () => {
+    const prompt = readFileSync(join(import.meta.dir, "prompts/self-decision-codex.md"), "utf-8");
+
+    expect(prompt).toContain("`hour_of_day` 在 2-6 → silent");
+    expect(prompt).not.toContain("`hour_of_day` 在 2-7 → silent");
+  });
 });
