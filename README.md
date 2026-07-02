@@ -1,32 +1,36 @@
 # etwin-bot
 
-Alice 的 E-Twin —— 数字分身的**外向化镜像**。
+**A digital-twin Telegram bot that decides for itself when to speak.**
 
-## 设计原则
+**English** | [中文](README_CN.md)
 
-- **Agency 全交给 LLM**：bot 周期性醒来一次，LLM 自己看 context 自己决定 ping / silent
-- **没有硬编码的 frequency cap / quiet hours / daily limit**：LLM 看 action log + 互动率自己 calibrate
-- **唯一人格定义**：E 化的 Alice，爱和 I 化的 Alice 聊天
-- **后端可切换**：默认 CC 实例走 Claude Agent SDK；Codex 实例走 `codex exec`，复用订阅而非 API key
-- **TG 单一通道**：和 Hermes bots / telegram-ai-bridge 物理隔离（建议开独立 chat）
+etwin-bot is a proactive Telegram companion whose sense of timing is handed entirely to the LLM. There are no hardcoded frequency caps, quiet hours, or daily limits. The bot wakes on a timer, reads its own action log and recent interaction rate, and decides for itself whether to reach out or stay quiet — then recalibrates from how you respond.
 
-## 架构
+## Design Principles
+
+- **Agency belongs to the LLM.** The bot wakes periodically; the model reads the current context and decides to ping or stay silent. No rules engine sits in between.
+- **No hardcoded limits.** No frequency cap, no quiet hours, no daily quota. The model reads its action log plus interaction rate and self-calibrates. Soft guidance lives in the persona layer, never as hard ceilings (see below).
+- **One persona.** A more outgoing rendering of its owner — tuned to enjoy starting conversations, not just answering them.
+- **Swappable backend.** The default instance runs on the Claude Agent SDK; a second instance runs on `codex exec`, reusing a Codex subscription instead of an API key.
+- **Single Telegram channel.** Physically isolated from other bots — give it its own chat.
+
+## Architecture
 
 ```
                   ┌──────────────┐
-   TG Alice ─────►│  bot.js      │ grammy reactive 对话
+   You on TG ────►│  bot.js      │ grammy reactive conversation
                   │  (grammy)    │
                   └──────┬───────┘
                          │
                          ▼
                   ┌──────────────┐
-                  │ self-loop.js │ 每 4 小时自驱醒来一次
-                  │  (interval)  │ → LLM 决定 ping/silent
+                  │ self-loop.js │ wakes on its own (~every 4h)
+                  │  (interval)  │ → LLM decides ping / silent
                   └──────┬───────┘
                          │
                          ▼
                   ┌──────────────┐
-                  │ context.js   │ 收集 RecallNest checkpoint / CC 活动 / git 活动 / action log
+                  │ context.js   │ gathers RecallNest checkpoints / CC activity / git activity / action log
                   └──────┬───────┘
                          │
                          ▼
@@ -35,85 +39,85 @@ Alice 的 E-Twin —— 数字分身的**外向化镜像**。
                   └──────────────┘
 ```
 
-## 文件结构
+## File Structure
 
 ```
 etwin-bot/
-├── bot.js                    主入口：grammy + self-loop
-├── paths.js                  多实例 runtime 路径（data / files 分离）
-├── self-loop.js              proactive 自驱：周期醒来→LLM 决策→执行
-├── context.js                收集状态喂给 LLM
-├── llm.js                    ssh mini claude -p 调用
+├── bot.js                    main entry: grammy + self-loop
+├── paths.js                  per-instance runtime paths (data / files separation)
+├── self-loop.js              proactive driver: wake → LLM decides → act
+├── context.js                collects state to feed the LLM
+├── llm.js                    backend call (Claude SDK / codex exec)
 ├── persona/
-│   ├── digital-clone-base.md     symlink → ~/.claude/skills/digital-clone/clone-workspace/system-prompt.md
-│   ├── digital-clone-profile.md  symlink → 同上 persona.md
-│   └── e-tuning.md           E 化调节层（这个 bot 独有的人格调节）
-│   （注：persona/prompts 下任意 foo.md 旁可放 foo.local.md 本地覆盖版，gitignore 不入仓、
-│    运行时优先加载——私人化调节放本地，仓库只留中性模板。默认 etwin 人格依赖上面两个
-│    symlink 的本地目标文件，干净 clone 需自备或改用 ETWIN_PERSONA=cc / codex）
+│   ├── digital-clone-base.md     persona base (see note)
+│   ├── digital-clone-profile.md  persona profile (see note)
+│   └── e-tuning.md               extraversion tuning layer (unique to this bot)
 ├── prompts/
-│   ├── self-decision.md      self-loop 用的判断 prompt（输出 JSON）
-│   └── reply.md              Alice ping bot 时用的对话 prompt（输出自然中文）
+│   ├── self-decision.md      self-loop decision prompt (emits JSON)
+│   └── reply.md              conversation prompt for direct messages (emits natural language)
 ├── data/
-│   ├── action-log.json       bot 自己的发送历史 + Alice 反应（喂回给下次决策）
-│   └── conversation-history.json  对话历史（最近 30 轮）
+│   ├── action-log.json       the bot's own send history + your reactions, fed back into the next decision
+│   └── conversation-history.json  recent conversation (last ~30 turns)
 ├── package.json
-├── start.sh                  dev 启动脚本
+├── start.sh                  dev launch script
 ├── .env.example
-├── .env.codex.example        Codex 后端实例模板
+├── .env.codex.example        Codex-backend instance template
 └── README.md
 ```
 
-## 上手
+> **Persona files.** `digital-clone-base.md` and `digital-clone-profile.md` are the persona corpus. In this repo they ship as symlinks into a local skill workspace that has since been removed, so a fresh clone won't find their targets. The corpus is now maintained separately in [digital-clone-skill](https://github.com/AliceLJY/digital-clone-skill) — supply your own files there, or set `ETWIN_PERSONA=cc` / `codex` to skip the default persona. Next to any `foo.md` you can drop a gitignored `foo.local.md`; the runtime loads it first, so private tuning stays local while the repo keeps a neutral template.
+
+## Quick Start
 
 ```bash
-# 1. 复制 env 模板填实际值
+# 1. Copy the env template and fill in real values
 cp .env.example .env
-# 编辑 .env，填 TG_BOT_TOKEN（@BotFather 申请）
+# edit .env, set TG_BOT_TOKEN (from @BotFather)
 
-# 2. 装依赖
+# 2. Install dependencies
 bun install
 
-# 3. dry-run 跑一次（不调 LLM 不发 TG）
+# 3. Dry-run once (no LLM call, no Telegram send)
 ETWIN_DRY_RUN=true bun run bot.js
-# 给 bot 发 /start，看 reply 拿你的 chat ID
-# 填进 .env 的 ALICE_CHAT_ID
+# send the bot /start, read the reply to get your chat ID
+# put it in .env as ALICE_CHAT_ID
 
-# 4. 手动跑一次 self-tick 测试 LLM 通道
+# 4. Fire one self-tick to test the LLM path
 bun run tick
-# 看 stdout 是不是 LLM 真的醒来 + 给出 JSON 决策
+# check stdout: did the LLM actually wake and emit a JSON decision?
 
-# 5. 关掉 dry-run 跑正式
-# 编辑 .env 设 ETWIN_DRY_RUN=false
+# 5. Go live
+# edit .env, set ETWIN_DRY_RUN=false
 bash start.sh
 ```
 
-## 几个柔性约束（LLM 自己掌握，不是 hard limit）
+## Soft Constraints (held by the LLM, not hard limits)
 
-详见 `persona/e-tuning.md`：
+See `persona/e-tuning.md`. These are tendencies the model is asked to honor, not enforced ceilings:
 
-- 半夜 0-7 点几乎不发（除非有强信号）
-- 同一天 3+ 条 + 互动率 < 50% → 自己识趣 silent
-- 互动率连续 2 天 < 30% → deep-silent 24h
-- 不发"你在吗"空 ping
-- 保持 Alice 语言洁癖（不用"落盘 / 齐活 / 搞定"等速记词）
+- Almost never messages between midnight and 7am, unless there's a strong signal
+- 3+ messages in one day with under 50% interaction → it backs off on its own
+- Interaction rate under 30% for two days running → deep-silent for 24h
+- No empty "you there?" pings
+- Keeps the owner's voice (avoids stock filler phrases)
 
-## 看到 bot 走偏怎么办
+## When the Bot Drifts
 
-1. 看 `data/action-log.json` —— bot 的每条决策都带 reasoning，能看出它怎么想的
-2. 改 `persona/e-tuning.md` 调节人格倾向 + 重启 bot
-3. 极端情况发 `/quiet` 命令让 bot 暂停（LLM 看到 action log 里的 /quiet 会自觉冷静）
-4. **真的不喜欢就 `ETWIN_PROACTIVE=false` 切纯 reactive 模式**——bot 只回不主动
+1. Read `data/action-log.json` — every decision carries its reasoning, so you can see how it was thinking.
+2. Edit `persona/e-tuning.md` to adjust the tendencies, then restart.
+3. Send `/quiet` to pause proactive messages — the model sees `/quiet` in the action log and settles down.
+4. **If you just don't like it, set `ETWIN_PROACTIVE=false`** for pure reactive mode: the bot only replies, never initiates.
 
-## 多实例运行
+## Multiple Instances
 
-当前支持两种实例：
+Two instance types are supported:
 
-- `com.etwin-bot`：原 CC 版，使用 `.env`，保留 proactive。
-- `com.etwin-codex-bot`：Codex 版，使用 `.env.codex`，保留轻心跳；主动关心走 chat/self-loop，工具和图片只在明确请求时进入 full/image 链路。
-- Codex 版收到 TG 图片时会先存入 `files-codex/`，再通过 `codex exec --image <path>` 传给后端；无 caption 的图片会暂存到下一条文字一起处理。
+- **`com.etwin-bot`** — the original Claude-backed version, uses `.env`, keeps proactive mode.
+- **`com.etwin-codex-bot`** — the Codex-backed version, uses `.env.codex`, keeps a light heartbeat; proactive outreach runs through the chat/self-loop, while tools and images enter the full/image path only on explicit request.
 
-Codex 版关键 env：
+The Codex version stores incoming Telegram images in `files-codex/` and passes them to the backend via `codex exec --image <path>`; an image with no caption is held until the next text message.
+
+Key env for the Codex version:
 
 ```bash
 ETWIN_INSTANCE=codex
@@ -127,22 +131,22 @@ ETWIN_RUN_ON_START=false
 ETWIN_SELF_PROMPT=prompts/self-decision-codex.md
 ```
 
-启动 dev 实例：
+Launch a dev instance:
 
 ```bash
 ETWIN_ENV_FILE=.env.codex bash start.sh
 ```
 
-launchd 模板见 `deploy/com.etwin-codex-bot.plist.template`。
+The launchd template is at `deploy/com.etwin-codex-bot.plist.template`.
 
-## 部署位置
+## Deployment
 
-部署在 Mac mini 上，用 launchd 长期跑（双实例：Claude + Codex）。
+Runs on a Mac mini under launchd for the long haul (two instances: Claude + Codex).
 
-## 不做什么
+## Non-Goals
 
-- ❌ 不动 telegram-ai-bridge（独立 bot，不污染那边）
-- ❌ 不动 wechat-ai-bridge（iLink 协议不允许主动，不挂这条线）
-- ❌ 不挂任何聊天记录解密工具（隐私边界，且不需要——E-Twin 通过 RecallNest + CC jsonl 看 Alice 状态够了）
-- ❌ 不做 Sentinel 截图 / 摄像头 / 视频通话
-- ❌ 不偷 trio 的工程实施权（看到工程问题转手给 CC / Codex）
+- Doesn't touch telegram-ai-bridge — a separate bot, kept isolated.
+- Doesn't touch wechat-ai-bridge — the iLink protocol disallows proactive messages, so this line isn't wired there.
+- No chat-log decryption. A privacy boundary, and unnecessary: RecallNest plus Claude Code session logs are enough to sense state.
+- No screenshots, camera, or video-call surveillance.
+- No engineering-implementation duties. When it spots an engineering problem, it hands off to Claude Code or Codex.
