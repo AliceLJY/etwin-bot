@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, statSync } from "fs";
-import { join } from "path";
 import { spawn } from "child_process";
 import { FILE_DIR } from "./paths.js";
+import { createGeneratedFilePath } from "./runtime-files.js";
 
 const DEFAULT_IMAGE_TIMEOUT_MS = 600000;
 const DEFAULT_IMAGE_PROVIDER = "codex-native";
@@ -169,7 +169,7 @@ function resolveCodexImageSandbox(env) {
 }
 
 function runCodexNativeImageCommand(prompt, outputPath, env, timeoutMs) {
-  const lastMessagePath = join(FILE_DIR, `codex-image-worker-${Date.now()}.txt`);
+  const lastMessagePath = createGeneratedFilePath(FILE_DIR, "codex-image-worker", ".txt");
   const model = env.ETWIN_IMAGE_CODEX_MODEL || env.ETWIN_CODEX_MODEL || env.CODEX_MODEL || DEFAULT_CODEX_IMAGE_MODEL;
   const reasoningEffort = resolveCodexImageReasoningEffort(env);
   const serviceTier = resolveCodexImageServiceTier(env);
@@ -207,7 +207,7 @@ function runCodexNativeImageCommand(prompt, outputPath, env, timeoutMs) {
 
 export async function generateTelegramImage(request, env = process.env) {
   mkdirSync(FILE_DIR, { recursive: true });
-  const outputPath = join(FILE_DIR, `codex-image-${Date.now()}.png`);
+  const outputPath = createGeneratedFilePath(FILE_DIR, "codex-image", ".png");
   const timeoutMs = resolveImageTimeoutMs(env);
   const prompt = buildImagePrompt(request, env);
   const provider = resolveImageProvider(env);

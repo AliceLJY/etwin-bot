@@ -1,18 +1,18 @@
 # etwin-bot
 
-**A digital-twin Telegram bot that decides for itself when to speak.**
+**A single-user, proactive Telegram companion with model-led timing.**
 
 **English** | [中文](README_CN.md)
 
-etwin-bot is a proactive Telegram companion whose sense of timing is handed entirely to the LLM. There are no hardcoded frequency caps, quiet hours, or daily limits. The bot wakes on a timer, reads its own action log and recent interaction rate, and decides for itself whether to reach out or stay quiet — then recalibrates from how you respond.
+etwin-bot wakes on a configurable timer, gives recent conversation and interaction context to a Claude or Codex backend, and lets the model decide whether to reach out or stay quiet. Cadence is mostly model-led, but not absolute: an explicit `/quiet` command is enforced in code for 24 hours before any LLM call.
 
 ## Design Principles
 
-- **Agency belongs to the LLM.** The bot wakes periodically; the model reads the current context and decides to ping or stay silent. No rules engine sits in between.
-- **No hardcoded limits.** No frequency cap, no quiet hours, no daily quota. The model reads its action log plus interaction rate and self-calibrates. Soft guidance lives in the persona layer, never as hard ceilings (see below).
-- **One persona.** A more outgoing rendering of its owner — tuned to enjoy starting conversations, not just answering them.
+- **Model-led cadence.** The bot wakes periodically; the model reads current context, prompt policy, and interaction history before choosing `ping` or `silent`.
+- **Deterministic owner override.** `/quiet` blocks proactive ticks for 24 hours without spending a provider call. Other cadence guidance stays in the selected prompt/persona.
+- **Personal persona.** The public repo ships neutral templates; private profile details can live in gitignored `.local.md` overrides.
 - **Swappable backend.** The default instance runs on the Claude Agent SDK; a second instance runs on `codex exec`, reusing a Codex subscription instead of an API key.
-- **Single Telegram channel.** Physically isolated from other bots — give it its own chat.
+- **Single-user Telegram boundary.** Non-dry-run startup requires an exact `ALICE_CHAT_ID`, and every tool-bearing text/media handler checks it. Use a dedicated bot token and chat.
 
 ## Architecture
 
@@ -24,7 +24,7 @@ etwin-bot is a proactive Telegram companion whose sense of timing is handed enti
                          │
                          ▼
                   ┌──────────────┐
-                  │ self-loop.js │ wakes on its own (~every 4h)
+                  │ self-loop.js │ wakes on a configured interval
                   │  (interval)  │ → LLM decides ping / silent
                   └──────┬───────┘
                          │
@@ -39,18 +39,21 @@ etwin-bot is a proactive Telegram companion whose sense of timing is handed enti
                   └──────────────┘
 ```
 
+The tracked env examples use a four-hour interval (`14400000` ms). If the variable is omitted, the code fallback is 30 minutes.
+
 ## File Structure
 
 ```
 etwin-bot/
 ├── bot.js                    main entry: grammy + self-loop
 ├── paths.js                  per-instance runtime paths (data / files separation)
+├── runtime-files.js          contained, collision-resistant inbound/output paths
 ├── self-loop.js              proactive driver: wake → LLM decides → act
 ├── context.js                collects state to feed the LLM
 ├── llm.js                    backend call (Claude SDK / codex exec)
 ├── persona/
-│   ├── digital-clone-base.md     persona base (see note)
-│   ├── digital-clone-profile.md  persona profile (see note)
+│   ├── digital-clone-base.md     public neutral persona base
+│   ├── digital-clone-profile.md  public neutral operator profile
 │   └── e-tuning.md               extraversion tuning layer (unique to this bot)
 ├── prompts/
 │   ├── self-decision.md      self-loop decision prompt (emits JSON)
@@ -65,7 +68,7 @@ etwin-bot/
 └── README.md
 ```
 
-> **Persona files.** `digital-clone-base.md` and `digital-clone-profile.md` are the persona corpus. In this repo they ship as symlinks into a local skill workspace that has since been removed, so a fresh clone won't find their targets. The corpus is now maintained separately in [digital-clone-skill](https://github.com/AliceLJY/digital-clone-skill) — supply your own files there, or set `ETWIN_PERSONA=cc` / `codex` to skip the default persona. Next to any `foo.md` you can drop a gitignored `foo.local.md`; the runtime loads it first, so private tuning stays local while the repo keeps a neutral template.
+> **Persona files.** The two tracked digital-clone files are regular, neutral templates, so the default mode works in a clean clone. A richer corpus can be maintained separately in [digital-clone-skill](https://github.com/AliceLJY/digital-clone-skill). Next to any `foo.md`, you can add a gitignored `foo.local.md`; the runtime loads it first, keeping private tuning out of the public repo.
 
 ## Quick Start
 
@@ -77,35 +80,40 @@ cp .env.example .env
 # 2. Install dependencies
 bun install
 
-# 3. Dry-run once (no LLM call, no Telegram send)
+# 3. Dry-run once (no provider call or proactive send)
 ETWIN_DRY_RUN=true bun run bot.js
-# send the bot /start, read the reply to get your chat ID
+# dry-run still connects to Telegram, replies to /start/text, and can update local action state
+# send the bot /start and read its reply to get your chat ID
 # put it in .env as ALICE_CHAT_ID
 
-# 4. Fire one self-tick to test the LLM path
+# 4. Fire one provider-backed self-tick to test the configured LLM path
 bun run tick
-# check stdout: did the LLM actually wake and emit a JSON decision?
+# this command makes a real backend call unless ETWIN_DRY_RUN=true
 
 # 5. Go live
 # edit .env, set ETWIN_DRY_RUN=false
 bash start.sh
 ```
 
-## Soft Constraints (held by the LLM, not hard limits)
+## Security Boundary
 
-See `persona/e-tuning.md`. These are tendencies the model is asked to honor, not enforced ceilings:
+This project intentionally gives a personal bot meaningful host access, so the trust boundary matters more than the bot UI:
 
-- Almost never messages between midnight and 7am, unless there's a strong signal
-- 3+ messages in one day with under 50% interaction → it backs off on its own
-- Interaction rate under 30% for two days running → deep-silent for 24h
-- No empty "you there?" pings
-- Keeps the owner's voice (avoids stock filler phrases)
+- `ALICE_CHAT_ID` is mandatory outside dry-run, and media/text handlers repeat the same exact-chat check.
+- Claude full mode uses `bypassPermissions`; Codex full mode can be configured as `danger-full-access`. The bot can therefore act with the permissions of the host account.
+- Telegram files are downloaded locally, then relevant prompts/files are sent to the selected Claude or Codex path. This is not an offline-only data flow.
+- Inbound names are sanitized and resolved under `ETWIN_FILE_DIR`; generated image outputs use contained, collision-resistant names.
+- Keep the bot token, chat ID, runtime data, and private `.local.md` files out of the repository. Do not reuse this configuration as a public or multi-user bot.
+
+## Cadence Policy
+
+The selected self-decision prompt and persona carry the ordinary timing policy. The current E-tuning/Codex guidance treats 02:00–06:00 as a sleep window, backs off after recent conversation or repeated unread pings, and rejects empty check-ins. These are model instructions and can vary by prompt; only an active `/quiet` request is a deterministic code gate.
 
 ## When the Bot Drifts
 
 1. Read `data/action-log.json` — every decision carries its reasoning, so you can see how it was thinking.
 2. Edit `persona/e-tuning.md` to adjust the tendencies, then restart.
-3. Send `/quiet` to pause proactive messages — the model sees `/quiet` in the action log and settles down.
+3. Send `/quiet` to pause proactive messages — the runtime records a 24-hour quiet window and skips the LLM while it is active.
 4. **If you just don't like it, set `ETWIN_PROACTIVE=false`** for pure reactive mode: the bot only replies, never initiates.
 
 ## Multiple Instances
@@ -149,4 +157,4 @@ Runs on a Mac mini under launchd for the long haul (two instances: Claude + Code
 - Doesn't touch wechat-ai-bridge — the iLink protocol disallows proactive messages, so this line isn't wired there.
 - No chat-log decryption. A privacy boundary, and unnecessary: RecallNest plus Claude Code session logs are enough to sense state.
 - No screenshots, camera, or video-call surveillance.
-- No engineering-implementation duties. When it spots an engineering problem, it hands off to Claude Code or Codex.
+- No multi-user or hosted-service mode. Explicit work requests may enter the local full-tool path; that path is intentionally personal and high privilege.
