@@ -1,5 +1,5 @@
-// self-loop.js — bot 周期性自驱醒来，全部决策权交给 LLM
-// 不硬编码 frequency cap / quiet hours / daily limit——LLM 自己看 context 自己判断
+// self-loop.js — bot 周期性醒来，由 LLM 决定是否开口
+// 常规节奏由 prompt + context 调节；操作者显式 /quiet 时由代码确定性拦截
 
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import { join } from "path";
@@ -155,7 +155,7 @@ export async function selfTick({ sendMessage, dryRun = false } = {}) {
 export function startSelfLoop({ sendMessage, dryRun = false, runOnStart = true } = {}) {
   console.log(`[self-loop] 启动 — interval=${WAKE_INTERVAL_MS}ms dryRun=${dryRun} runOnStart=${runOnStart}`);
 
-  // 启动 30 秒后跑第一次（让 bot 稳定 + Alice 重启完不用等 4 小时看效果）
+  // 启动 30 秒后跑第一次（让 bot 稳定，也不用等完整配置间隔看效果）
   // LLM 自己看 context 决定要不要 ping，可能 silent 也可能 hello
   if (runOnStart) {
     setTimeout(() => {

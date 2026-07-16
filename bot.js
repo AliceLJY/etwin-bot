@@ -15,6 +15,7 @@ import { shouldDistill, runDistill } from "./distill.js";
 import { FILE_DIR, INSTANCE_ID, PROJECT_DIR, dataPath, ensureRuntimeDirs, readPromptFile } from "./paths.js";
 import { splitMessages } from "./message-split.js";
 import { TOOL_MODE_FULL, isImageFollowupRequest, isImageGenerationRequest, resolveToolMode } from "./tool-mode.js";
+import { createInboundFilePath } from "./runtime-files.js";
 
 // 下载 TG 文件到本地（参考 telegram-ai-bridge bridge.js downloadFile）
 ensureRuntimeDirs();
@@ -48,8 +49,8 @@ async function downloadTGFile(ctx, fileId, filename) {
     : await fetch(url);
   if (!resp.ok) throw new Error(`Download failed: ${resp.status} ${resp.statusText}`);
   const buffer = Buffer.from(await resp.arrayBuffer());
-  const localPath = join(FILE_DIR, `${Date.now()}-${filename}`);
-  writeFileSync(localPath, buffer);
+  const localPath = createInboundFilePath(FILE_DIR, filename);
+  writeFileSync(localPath, buffer, { flag: "wx", mode: 0o600 });
   return localPath;
 }
 
