@@ -49,6 +49,11 @@ etwin-bot/
 ├── self-loop.js              proactive 自驱：周期醒来→LLM 决策→执行
 ├── context.js                收集状态喂给 LLM
 ├── llm.js                    Claude Agent SDK / codex exec 后端调用
+├── image-generation.js       明确图片请求的路由
+├── interaction.js            静默窗口与互动统计
+├── message-split.js          Telegram 安全分段
+├── deploy/                   不含个人路径的 launchd 模板
+├── install-launchd.sh        按本机路径渲染 LaunchAgent
 ├── persona/
 │   ├── digital-clone-base.md     公开中性人格基底
 │   ├── digital-clone-profile.md  公开中性操作者画像
@@ -147,6 +152,17 @@ launchd 模板见 `deploy/com.etwin-codex-bot.plist.template`。
 ## 部署位置
 
 部署在 Mac mini 上，用 launchd 长期跑（双实例：Claude + Codex）。
+仓库中的模板只保留占位符，不保存用户名或 checkout 绝对路径。先按当前机器渲染两个 LaunchAgent，再加载需要的服务：
+
+```bash
+./install-launchd.sh
+launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.etwin-bot.plist" 2>/dev/null || true
+launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.etwin-bot.plist"
+launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.etwin-codex-bot.plist" 2>/dev/null || true
+launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.etwin-codex-bot.plist"
+```
+
+Claude SDK 调用受 `ETWIN_CLAUDE_TIMEOUT_MS` 限制，默认 10 分钟，到期会主动 abort。self-loop 不允许重入：上一条主动调用仍未结束时，下一次定时 tick 会跳过，不会再发起第二条模型调用。
 
 ## 不做什么
 

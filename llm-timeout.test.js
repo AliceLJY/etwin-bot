@@ -4,6 +4,7 @@ import { join } from "path";
 import {
   DEFAULT_CLAUDE_REACTIVE_MAX_TURNS,
   DEFAULT_CLAUDE_SELF_LOOP_MAX_TURNS,
+  DEFAULT_CLAUDE_TIMEOUT_MS,
   DEFAULT_CODEX_CHAT_MAX_ATTEMPTS,
   DEFAULT_CODEX_CHAT_TIMEOUT_MS,
   DEFAULT_CODEX_FULL_TIMEOUT_MS,
@@ -11,8 +12,10 @@ import {
   DEFAULT_CODEX_SERVICE_TIER,
   DEFAULT_CODEX_TIMEOUT_MS,
   buildSystemPrompt,
+  callClaudeSDK,
   codexPrompt,
   resolveClaudeMaxTurns,
+  resolveClaudeTimeoutMs,
   resolveCodexMaxAttempts,
   resolveCodexReasoningEffort,
   resolveCodexSandbox,
@@ -21,6 +24,107 @@ import {
   shouldIgnoreCodexUserConfig,
   shouldUseCodexEphemeral,
 } from "./llm.js";
+
+describe("resolveClaudeTimeoutMs", () => {
+  test("defaults to ten minutes and accepts the legacy shared timeout", () => {
+    expect(resolveClaudeTimeoutMs({})).toBe(DEFAULT_CLAUDE_TIMEOUT_MS);
+    expect(resolveClaudeTimeoutMs({ LLM_TIMEOUT_MS: "120000" })).toBe(120000);
+  });
+
+  test("prefers the Claude-specific timeout and rejects invalid values", () => {
+    expect(resolveClaudeTimeoutMs({
+      ETWIN_CLAUDE_TIMEOUT_MS: "240000",
+      LLM_TIMEOUT_MS: "120000",
+    })).toBe(240000);
+    expect(resolveClaudeTimeoutMs({ ETWIN_CLAUDE_TIMEOUT_MS: "0" })).toBe(DEFAULT_CLAUDE_TIMEOUT_MS);
+  });
+
+  test("aborts a hanging SDK query when the deadline expires", async () => {
+    let observedSignal;
+    let closed = false;
+    let signalWasAbortedWhenClosed;
+    const hangingQuery = ({ options }) => {
+      observedSignal = options.abortController.signal;
+      return {
+        async *[Symbol.asyncIterator]() {
+          await new Promise((resolve, reject) => {
+            observedSignal.addEventListener(
+              "abort",
+              () => reject(new DOMException("aborted", "AbortError")),
+              { once: true },
+            );
+          });
+          yield { type: "result", result: "unreachable" };
+        },
+        close() {
+          signalWasAbortedWhenClosed = observedSignal.aborted;
+          closed = true;
+        },
+      };
+    };
+
+    await expect(callClaudeSDK("timeout test", {
+      fresh: true,
+      queryFn: hangingQuery,
+      timeoutMs: 20,
+    })).rejects.toThrow("Claude SDK timed out after 20ms");
+    expect(observedSignal.aborted).toBe(true);
+    expect(closed).toBe(true);
+    expect(signalWasAbortedWhenClosed).toBe(false);
+  });
+
+  test("reports timeout when Query.close ends iteration normally", async () => {
+    let finishIteration;
+    const normallyClosingQuery = () => ({
+      [Symbol.asyncIterator]() { return this; },
+      next() {
+        return new Promise((resolve) => { finishIteration = resolve; });
+      },
+      close() {
+        finishIteration({ done: true, value: undefined });
+      },
+    });
+
+    await expect(callClaudeSDK("normal close timeout test", {
+      fresh: true,
+      queryFn: normallyClosingQuery,
+      timeoutMs: 20,
+    })).rejects.toThrow("Claude SDK timed out after 20ms");
+  });
+
+  test("persists a new session after an invalid resume falls back to fresh", async () => {
+    let storedSession = "invalid-session";
+    const saved = [];
+    const sessionStore = {
+      load: () => storedSession,
+      save: (kind, sessionId) => {
+        saved.push([kind, sessionId]);
+        storedSession = sessionId;
+      },
+    };
+    const resumeValues = [];
+    const recoveringQuery = ({ options }) => ({
+      async *[Symbol.asyncIterator]() {
+        resumeValues.push(options.resume || null);
+        if (options.resume) throw new Error("session not found");
+        yield { type: "system", session_id: "recovered-session" };
+        yield { type: "result", result: "recovered" };
+      },
+      close() {},
+    });
+
+    const result = await callClaudeSDK("resume test", {
+      queryFn: recoveringQuery,
+      sessionStore,
+      timeoutMs: 1000,
+    });
+
+    expect(result).toBe("recovered");
+    expect(resumeValues).toEqual(["invalid-session", null]);
+    expect(saved).toEqual([["reactive", "recovered-session"]]);
+    expect(storedSession).toBe("recovered-session");
+  });
+});
 
 describe("resolveCodexTimeoutMs", () => {
   test("defaults to 10 minutes for Codex backend", () => {

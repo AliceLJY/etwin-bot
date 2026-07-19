@@ -14,6 +14,24 @@ const CONV_HISTORY = dataPath("conversation-history.json");
 const HOME = homedir();
 const RECALL_SCOPE = process.env.ETWIN_RECALL_SCOPE || "etwin:alice";
 
+export function quoteRemoteShellArg(value) {
+  return `'${String(value).replaceAll("'", `'\\''`)}'`;
+}
+
+export function buildLatestCheckpointCommand(scope) {
+  return [
+    'cd "$HOME/recallnest"',
+    '&& "$HOME/.bun/bin/bun" run src/cli.ts latest-checkpoint',
+    `--scope ${quoteRemoteShellArg(scope)}`,
+    "--json 2>/dev/null",
+    "|| printf '%s\\n' '{}'",
+  ].join(" ");
+}
+
+export function buildLatestCheckpointSshArgs(host, scope) {
+  return ["--", host, buildLatestCheckpointCommand(scope)];
+}
+
 // 读最近 N 轮对话历史（让 self-loop LLM 能看到 Alice 最近说的话，识别 pause signal）
 function loadRecentConversation(n = 10) {
   if (!existsSync(CONV_HISTORY)) return [];
@@ -100,10 +118,7 @@ async function fetchLatestCheckpoint() {
     const sshHost = process.env.MINI_SSH_HOST || "mini";
     const out = execFileSync(
       "ssh",
-      [
-        sshHost,
-        `cd ~/recallnest && /Users/anxianjingya/.bun/bin/bun run src/cli.ts latest-checkpoint --scope ${JSON.stringify(RECALL_SCOPE)} --json 2>/dev/null || echo {}`,
-      ],
+      buildLatestCheckpointSshArgs(sshHost, RECALL_SCOPE),
       {
         encoding: "utf-8",
         timeout: 10000,

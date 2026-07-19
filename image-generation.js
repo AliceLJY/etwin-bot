@@ -1,11 +1,12 @@
 import { existsSync, mkdirSync, statSync } from "fs";
 import { spawn } from "child_process";
+import { homedir, tmpdir } from "os";
+import { isAbsolute, join } from "path";
 import { FILE_DIR } from "./paths.js";
 import { createGeneratedFilePath } from "./runtime-files.js";
 
 const DEFAULT_IMAGE_TIMEOUT_MS = 600000;
 const DEFAULT_IMAGE_PROVIDER = "codex-native";
-const DEFAULT_GEMINI_IMAGE_CLI = "/Users/anxianjingya/content-publisher/scripts/gemini-web-image/gemini-web-image.ts";
 const DEFAULT_GEMINI_IMAGE_MODEL = "gemini-2.5-flash";
 const DEFAULT_CODEX_IMAGE_MODEL = "gpt-5.5";
 const DEFAULT_CODEX_IMAGE_REASONING_EFFORT = "low";
@@ -23,6 +24,17 @@ export function resolveImageTimeoutMs(env = process.env) {
 export function resolveImageProvider(env = process.env) {
   const provider = String(env.ETWIN_IMAGE_PROVIDER || DEFAULT_IMAGE_PROVIDER).trim().toLowerCase();
   return ["codex-native", "gemini"].includes(provider) ? provider : DEFAULT_IMAGE_PROVIDER;
+}
+
+export function resolveGeminiImageRuntime(env = process.env, home = homedir()) {
+  const cwd = env.ETWIN_CONTENT_PUBLISHER_DIR || join(home, "content-publisher");
+  const configuredCli = env.ETWIN_IMAGE_CLI || join(
+    "scripts",
+    "gemini-web-image",
+    "gemini-web-image.ts",
+  );
+  const cliPath = isAbsolute(configuredCli) ? configuredCli : join(cwd, configuredCli);
+  return { cwd, cliPath };
 }
 
 export function buildImagePrompt(request = "", env = process.env) {
@@ -138,7 +150,7 @@ function runCommand(command, args, { cwd, env, stdin, timeoutMs, label }) {
 }
 
 function runGeminiImageCommand(prompt, outputPath, env, timeoutMs) {
-  const cliPath = env.ETWIN_IMAGE_CLI || DEFAULT_GEMINI_IMAGE_CLI;
+  const { cwd, cliPath } = resolveGeminiImageRuntime(env);
   const model = env.ETWIN_IMAGE_MODEL || DEFAULT_GEMINI_IMAGE_MODEL;
   return runCommand("bun", [
     cliPath,
@@ -146,7 +158,7 @@ function runGeminiImageCommand(prompt, outputPath, env, timeoutMs) {
     "--output", outputPath,
     "--model", model,
   ], {
-    cwd: "/Users/anxianjingya/content-publisher",
+    cwd,
     env,
     timeoutMs,
     label: "gemini image generation",
@@ -178,7 +190,7 @@ function runCodexNativeImageCommand(prompt, outputPath, env, timeoutMs) {
     "exec",
     "--ignore-user-config",
     "--enable", "image_generation",
-    "--cd", "/tmp",
+    "--cd", tmpdir(),
     "--add-dir", FILE_DIR,
     "--skip-git-repo-check",
     "--sandbox", sandbox,
@@ -197,7 +209,7 @@ function runCodexNativeImageCommand(prompt, outputPath, env, timeoutMs) {
   args.push("-");
 
   return runCommand("codex", args, {
-    cwd: "/tmp",
+    cwd: tmpdir(),
     env,
     stdin: buildCodexImageWorkerPrompt(prompt, outputPath),
     timeoutMs,

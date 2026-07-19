@@ -151,25 +151,46 @@ export async function selfTick({ sendMessage, dryRun = false } = {}) {
   return decision;
 }
 
+export function createNonOverlappingTickRunner(runTick, onError = console.error) {
+  let inFlight = false;
+  return async () => {
+    if (inFlight) {
+      console.warn("[self-loop] 上一次 tick 尚未结束，跳过本次");
+      return false;
+    }
+
+    inFlight = true;
+    try {
+      await runTick();
+      return true;
+    } catch (error) {
+      onError(error);
+      return false;
+    } finally {
+      inFlight = false;
+    }
+  };
+}
+
 // 启动 self-loop
 export function startSelfLoop({ sendMessage, dryRun = false, runOnStart = true } = {}) {
   console.log(`[self-loop] 启动 — interval=${WAKE_INTERVAL_MS}ms dryRun=${dryRun} runOnStart=${runOnStart}`);
+  const runTick = createNonOverlappingTickRunner(
+    () => selfTick({ sendMessage, dryRun }),
+    (error) => console.error("[self-loop] tick 异常:", error),
+  );
 
   // 启动 30 秒后跑第一次（让 bot 稳定，也不用等完整配置间隔看效果）
   // LLM 自己看 context 决定要不要 ping，可能 silent 也可能 hello
   if (runOnStart) {
     setTimeout(() => {
       console.log("[self-loop] 启动后第一次 tick");
-      selfTick({ sendMessage, dryRun }).catch((e) => {
-        console.error("[self-loop] initial tick 异常:", e);
-      });
+      void runTick();
     }, 30000);
   }
 
   return setInterval(() => {
-    selfTick({ sendMessage, dryRun }).catch((e) => {
-      console.error("[self-loop] tick 异常:", e);
-    });
+    void runTick();
   }, WAKE_INTERVAL_MS);
 }
 

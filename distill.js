@@ -4,6 +4,7 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from "fs";
 import { join } from "path";
+import { homedir } from "os";
 import { callMiniCC, parseDecisionJSON } from "./llm.js";
 import { PROJECT_DIR, dataPath, ensureRuntimeDirs } from "./paths.js";
 
@@ -57,7 +58,7 @@ function acquireLock() {
 function releaseLock() {
   if (existsSync(DISTILL_LOCK)) {
     try {
-      renameSync(DISTILL_LOCK, join(process.env.HOME || "/Users/anxianjingya", ".Trash", `etwin-distill-lock-${Date.now()}`));
+      renameSync(DISTILL_LOCK, join(homedir(), ".Trash", `etwin-distill-lock-${Date.now()}`));
     } catch (_) {}
   }
 }

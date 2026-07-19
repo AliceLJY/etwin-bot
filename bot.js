@@ -7,6 +7,7 @@ import { HttpsProxyAgent } from "https-proxy-agent";
 import { readFileSync, writeFileSync, existsSync, readdirSync, statSync, renameSync } from "fs";
 import { join } from "path";
 import { spawn } from "child_process";
+import { homedir } from "os";
 import { callMiniCC } from "./llm.js";
 import { generateTelegramImage } from "./image-generation.js";
 import { gatherContext } from "./context.js";
@@ -24,7 +25,7 @@ ensureRuntimeDirs();
 (function cleanupOldFiles() {
   const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
   try {
-    const trash = join(process.env.HOME || "/Users/anxianjingya", ".Trash");
+    const trash = join(homedir(), ".Trash");
     let moved = 0;
     for (const f of readdirSync(FILE_DIR)) {
       try {

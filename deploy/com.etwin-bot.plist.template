@@ -6,19 +6,20 @@
 	<string>com.etwin-bot</string>
 
 	<key>WorkingDirectory</key>
-	<string>/Users/anxianjingya/Projects/etwin-bot</string>
+	<string>__ETWIN_ROOT__</string>
 
 	<key>ProgramArguments</key>
 	<array>
 		<string>/bin/bash</string>
-		<string>-c</string>
-		<string>cd /Users/anxianjingya/Projects/etwin-bot &amp;&amp; set -a &amp;&amp; source .env &amp;&amp; set +a &amp;&amp; exec /Users/anxianjingya/.bun/bin/bun run bot.js</string>
+		<string>__ETWIN_ROOT__/start.sh</string>
 	</array>
 
 	<key>EnvironmentVariables</key>
 	<dict>
 		<key>PATH</key>
-		<string>/Users/anxianjingya/.bun/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+		<string>__ETWIN_HOME__/.bun/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+		<key>HOME</key>
+		<string>__ETWIN_HOME__</string>
 		<key>HTTPS_PROXY</key>
 		<string>http://127.0.0.1:7890</string>
 		<key>HTTP_PROXY</key>
@@ -34,10 +35,10 @@
 	<true/>
 
 	<key>StandardOutPath</key>
-	<string>/Users/anxianjingya/Projects/etwin-bot/etwin-bot.log</string>
+	<string>__ETWIN_ROOT__/etwin-bot.log</string>
 
 	<key>StandardErrorPath</key>
-	<string>/Users/anxianjingya/Projects/etwin-bot/etwin-bot.log</string>
+	<string>__ETWIN_ROOT__/etwin-bot.log</string>
 
 	<key>ExitTimeOut</key>
 	<integer>30</integer>

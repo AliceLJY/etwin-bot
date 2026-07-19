@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   buildCodexImageWorkerPrompt,
   buildImagePrompt,
+  resolveGeminiImageRuntime,
   resolveImageProvider,
   resolveImageTimeoutMs,
 } from "./image-generation.js";
@@ -37,6 +38,25 @@ describe("resolveImageProvider", () => {
 
   test("only uses Gemini when explicitly selected", () => {
     expect(resolveImageProvider({ ETWIN_IMAGE_PROVIDER: "gemini" })).toBe("gemini");
+  });
+});
+
+describe("resolveGeminiImageRuntime", () => {
+  test("derives portable defaults from the current home directory", () => {
+    expect(resolveGeminiImageRuntime({}, "/tmp/example-home")).toEqual({
+      cwd: "/tmp/example-home/content-publisher",
+      cliPath: "/tmp/example-home/content-publisher/scripts/gemini-web-image/gemini-web-image.ts",
+    });
+  });
+
+  test("supports an explicit publisher directory and absolute CLI", () => {
+    expect(resolveGeminiImageRuntime({
+      ETWIN_CONTENT_PUBLISHER_DIR: "/srv/publisher",
+      ETWIN_IMAGE_CLI: "/opt/bin/image.ts",
+    }, "/ignored")).toEqual({
+      cwd: "/srv/publisher",
+      cliPath: "/opt/bin/image.ts",
+    });
   });
 });
 

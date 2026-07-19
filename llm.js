@@ -21,6 +21,7 @@ export const DEFAULT_CODEX_CHAT_REASONING_EFFORT = "medium";
 export const DEFAULT_CODEX_FULL_REASONING_EFFORT = "high";
 export const DEFAULT_CODEX_SERVICE_TIER = "fast";
 export const DEFAULT_CLAUDE_MODEL = "opus";
+export const DEFAULT_CLAUDE_TIMEOUT_MS = 600000;
 export const DEFAULT_CLAUDE_SELF_LOOP_MAX_TURNS = 1;
 export const DEFAULT_CLAUDE_REACTIVE_MAX_TURNS = 30;
 
@@ -102,6 +103,11 @@ export function resolveClaudeMaxTurns(kind = "reactive", env = process.env) {
   return parsePositiveInteger(env.ETWIN_CLAUDE_REACTIVE_MAX_TURNS, DEFAULT_CLAUDE_REACTIVE_MAX_TURNS);
 }
 
+export function resolveClaudeTimeoutMs(env = process.env) {
+  const raw = env.ETWIN_CLAUDE_TIMEOUT_MS || env.LLM_TIMEOUT_MS || String(DEFAULT_CLAUDE_TIMEOUT_MS);
+  return parsePositiveInteger(raw, DEFAULT_CLAUDE_TIMEOUT_MS);
+}
+
 export function shouldUseClaudeFreshSession(kind = "reactive", opts = {}) {
   return opts.fresh === true || kind === "self-loop";
 }
@@ -149,20 +155,24 @@ function loadUserScopeMcpServers(names) {
 // Codex MCP 默认不接入，避免 CC -> Codex MCP -> Codex MCP 的套娃卡死。
 // 明确需要跨代理时仍可让 CC 通过 Bash 调 `codex exec`。
 // plugin-based 的（playwright/context7）hardcode npx 命令；user-scope 的从 ~/.claude.json 抽
-const ETWIN_MCP_SERVERS = {
-  playwright: {
-    command: "npx",
-    args: ["@playwright/mcp@latest"],
-  },
-  context7: {
-    command: "npx",
-    args: ["-y", "@upstash/context7-mcp"],
-  },
-  // recallnest / gemini-web-image 在 user-scope（含 JINA_API_KEY / OAuth / ssh 路径）
-  ...loadUserScopeMcpServers(ENABLE_CODEX_MCP
-    ? ["recallnest", "codex", "gemini-web-image"]
-    : ["recallnest", "gemini-web-image"]),
-};
+function buildEtwinMcpServers() {
+  return {
+    playwright: {
+      command: "npx",
+      args: ["@playwright/mcp@latest"],
+    },
+    context7: {
+      command: "npx",
+      args: ["-y", "@upstash/context7-mcp"],
+    },
+    // Only read user-scope MCP configuration when a real full-tool query needs
+    // it. Module imports and chat-only tests must not read credential-bearing
+    // local configuration.
+    ...loadUserScopeMcpServers(ENABLE_CODEX_MCP
+      ? ["recallnest", "codex", "gemini-web-image"]
+      : ["recallnest", "gemini-web-image"]),
+  };
+}
 
 // 白名单：让 E-Twin 像 CC 一样能干活——写代码 / 跑命令 / 抓信息 / 查记忆 / 画图 / 调 codex
 // 不放：Task（防 spawn subagent 套娃）、NotebookEdit（很少用）
@@ -465,6 +475,10 @@ export async function callClaudeSDK(userPrompt, opts = {}) {
   const dryRun = opts.dryRun || process.env.ETWIN_DRY_RUN === "true";
   const kind = opts.kind || "reactive";
   const toolMode = normalizeToolMode(opts.toolMode || TOOL_MODE_CHAT);
+  const sessionStore = opts.sessionStore || {
+    load: loadSessionId,
+    save: saveSessionId,
+  };
 
   if (dryRun) {
     console.log(`[llm dry-run kind=${kind} toolMode=${toolMode}] prompt 长度:`, userPrompt.length);
@@ -481,8 +495,11 @@ export async function callClaudeSDK(userPrompt, opts = {}) {
   }
 
   const freshSession = shouldUseClaudeFreshSession(kind, opts);
-  const resumeId = freshSession ? null : loadSessionId(kind);
+  const resumeId = freshSession ? null : sessionStore.load(kind);
   const useFullTools = toolMode === TOOL_MODE_FULL;
+  const timeoutMs = parsePositiveInteger(opts.timeoutMs, resolveClaudeTimeoutMs());
+  const abortController = new AbortController();
+  const queryFn = opts.queryFn || query;
 
   const sdkOptions = {
     model: LLM_MODEL,
@@ -493,7 +510,7 @@ export async function callClaudeSDK(userPrompt, opts = {}) {
     // 屏蔽 user-scope settings 源避免 Alice CLAUDE.md 工程规则污染 E-Twin 人格
     // 副作用：user-scope MCP servers 也跟着没了 → 用下面 mcpServers / allowedTools 单独补回
     settingSources: [],
-    mcpServers: useFullTools ? ETWIN_MCP_SERVERS : {},
+    mcpServers: useFullTools ? buildEtwinMcpServers() : {},
     allowedTools: useFullTools ? ETWIN_ALLOWED_TOOLS : [],
     systemPrompt: {
       type: "preset",
@@ -503,19 +520,33 @@ export async function callClaudeSDK(userPrompt, opts = {}) {
     // self-loop 单 turn 决策；reactive 留够 tool 调用空间。
     // 长文件审读 / 跨机查记录 / self-healing 会连续用工具，15 turns 偶发不够。
     maxTurns: resolveClaudeMaxTurns(kind),
+    abortController,
     // SDK 子进程 stderr 转发到 etwin-bot stderr 方便排错
     stderr: (data) => process.stderr.write(`[SDK stderr] ${data}`),
   };
-  console.log(`[claude] query kind=${kind} toolMode=${toolMode} model=${LLM_MODEL} tools=${useFullTools ? "full" : "chat"}`);
+  console.log(`[claude] query kind=${kind} toolMode=${toolMode} model=${LLM_MODEL} tools=${useFullTools ? "full" : "chat"} timeout=${timeoutMs}`);
 
   if (LLM_EFFORT) sdkOptions.effort = LLM_EFFORT;
   if (resumeId) sdkOptions.resume = resumeId;
 
   let resultText = "";
   let observedSessionId = resumeId;
+  let timedOut = false;
+  let activeQuery = null;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    try {
+      activeQuery?.close?.();
+    } catch (error) {
+      console.warn(`[claude] query close after timeout failed: ${error.message}`);
+    } finally {
+      abortController.abort();
+    }
+  }, timeoutMs);
 
   try {
-    for await (const ev of query({ prompt: userPrompt, options: sdkOptions })) {
+    activeQuery = queryFn({ prompt: userPrompt, options: sdkOptions });
+    for await (const ev of activeQuery) {
       // system event 携带 session_id（新 session 时）
       if (ev.type === "system" && ev.session_id) {
         observedSessionId = ev.session_id;
@@ -535,16 +566,32 @@ export async function callClaudeSDK(userPrompt, opts = {}) {
       }
     }
   } catch (err) {
+    if (timedOut) {
+      throw new Error(`Claude SDK timed out after ${timeoutMs}ms`, { cause: err });
+    }
     // resume 失败（thinking signature 过期 / session 被删等）→ 自动 fresh 重试一次
     if (resumeId && /invalid.*signature|invalid_request_error|session.*not.*found/i.test(err.message)) {
       console.warn(`[llm] resume sid=${resumeId.slice(0, 8)} 失败 (${err.message.slice(0, 80)})，新开 session 重试`);
-      return await callClaudeSDK(userPrompt, { ...opts, fresh: true });
+      clearTimeout(timeout);
+      return callClaudeSDK(userPrompt, {
+        ...opts,
+        fresh: true,
+        persistRecoveredSession: true,
+      });
     }
     throw err;
+  } finally {
+    clearTimeout(timeout);
   }
 
-  if (!freshSession && observedSessionId && observedSessionId !== resumeId) {
-    saveSessionId(kind, observedSessionId);
+  // Query.close() may end the iterator normally instead of throwing. Preserve
+  // timeout semantics even when cleanup produces a clean `done: true`.
+  if (timedOut) {
+    throw new Error(`Claude SDK timed out after ${timeoutMs}ms`);
+  }
+
+  if ((!freshSession || opts.persistRecoveredSession === true) && observedSessionId && observedSessionId !== resumeId) {
+    sessionStore.save(kind, observedSessionId);
     console.log(`[llm] saved session_id kind=${kind} sid=${observedSessionId.slice(0, 8)}`);
   }
 
