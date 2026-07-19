@@ -51,6 +51,11 @@ etwin-bot/
 ├── self-loop.js              proactive driver: wake → LLM decides → act
 ├── context.js                collects state to feed the LLM
 ├── llm.js                    backend call (Claude SDK / codex exec)
+├── image-generation.js       explicit image request routing
+├── interaction.js            quiet-window and reaction statistics
+├── message-split.js          Telegram-safe response segmentation
+├── deploy/                   path-free launchd plist templates
+├── install-launchd.sh        renders local LaunchAgent files
 ├── persona/
 │   ├── digital-clone-base.md     public neutral persona base
 │   ├── digital-clone-profile.md  public neutral operator profile
@@ -150,6 +155,21 @@ The launchd template is at `deploy/com.etwin-codex-bot.plist.template`.
 ## Deployment
 
 Runs on a Mac mini under launchd for the long haul (two instances: Claude + Codex).
+The tracked templates contain placeholders rather than a username or checkout
+path. Render both LaunchAgents for the current machine, then load the desired
+services:
+
+```bash
+./install-launchd.sh
+launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.etwin-bot.plist" 2>/dev/null || true
+launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.etwin-bot.plist"
+launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.etwin-codex-bot.plist" 2>/dev/null || true
+launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.etwin-codex-bot.plist"
+```
+
+Claude SDK calls are aborted after `ETWIN_CLAUDE_TIMEOUT_MS` (ten minutes by
+default). Timer ticks are non-overlapping: a still-running proactive call makes
+the next scheduled tick skip instead of starting a second model call.
 
 ## Non-Goals
 
