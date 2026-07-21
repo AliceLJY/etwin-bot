@@ -329,6 +329,7 @@ function spawnCodex(args, input, timeoutMs) {
 
     let stdout = "";
     let stderr = "";
+    let killTimer = null;
     const finish = (fn, value) => {
       if (settled) return;
       settled = true;
@@ -344,6 +345,14 @@ function spawnCodex(args, input, timeoutMs) {
       } catch (_) {
         child.kill("SIGTERM");
       }
+      killTimer = setTimeout(() => {
+        try {
+          process.kill(-child.pid, "SIGKILL");
+        } catch (_) {
+          try { child.kill("SIGKILL"); } catch { /* already gone */ }
+        }
+      }, 5000);
+      killTimer.unref?.();
       fail(new Error(`codex exec timed out after ${timeoutMs}ms (elapsed=${Date.now() - startedAt}ms)`));
     }, timeoutMs);
 
@@ -351,6 +360,7 @@ function spawnCodex(args, input, timeoutMs) {
     child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
     child.on("error", fail);
     child.on("close", (code, signal) => {
+      if (killTimer) clearTimeout(killTimer);
       const elapsed = Date.now() - startedAt;
       if (code === 0) succeed({ stdout, stderr });
       else if (signal) fail(new Error(`codex exec terminated by ${signal} after ${elapsed}ms: ${stderr.slice(-1200) || stdout.slice(-1200)}`));
