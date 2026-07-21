@@ -114,6 +114,7 @@ function runCommand(command, args, { cwd, env, stdin, timeoutMs, label }) {
     let stdout = "";
     let stderr = "";
     let settled = false;
+    let killTimer = null;
     const finish = (fn, value) => {
       if (settled) return;
       settled = true;
@@ -126,6 +127,14 @@ function runCommand(command, args, { cwd, env, stdin, timeoutMs, label }) {
       } catch (_) {
         child.kill("SIGTERM");
       }
+      killTimer = setTimeout(() => {
+        try {
+          process.kill(-child.pid, "SIGKILL");
+        } catch (_) {
+          try { child.kill("SIGKILL"); } catch { /* already gone */ }
+        }
+      }, 5000);
+      killTimer.unref?.();
       finish(reject, new Error(`${label} timed out after ${timeoutMs}ms (elapsed=${Date.now() - startedAt}ms)`));
     }, timeoutMs);
 
@@ -133,6 +142,7 @@ function runCommand(command, args, { cwd, env, stdin, timeoutMs, label }) {
     child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
     child.on("error", (err) => finish(reject, err));
     child.on("close", (code, signal) => {
+      if (killTimer) clearTimeout(killTimer);
       const elapsed = Date.now() - startedAt;
       if (code === 0) {
         finish(resolve, { stdout, stderr, elapsed });
