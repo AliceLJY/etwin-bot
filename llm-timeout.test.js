@@ -11,6 +11,7 @@ import {
   DEFAULT_CODEX_REASONING_EFFORT,
   DEFAULT_CODEX_SERVICE_TIER,
   DEFAULT_CODEX_TIMEOUT_MS,
+  agyPrompt,
   buildSystemPrompt,
   callClaudeSDK,
   codexPrompt,
@@ -21,6 +22,7 @@ import {
   resolveCodexSandbox,
   resolveCodexServiceTier,
   resolveCodexTimeoutMs,
+  resolveSelfHealingTarget,
   shouldIgnoreCodexUserConfig,
   shouldUseCodexEphemeral,
 } from "./llm.js";
@@ -315,6 +317,49 @@ describe("codexPrompt", () => {
 
     expect(prompt).toContain("严格 JSON");
     expect(prompt).not.toContain("不要包 JSON");
+  });
+});
+
+describe("agyPrompt", () => {
+  test("identifies the AGY backend and preserves self-loop JSON constraints", () => {
+    const prompt = agyPrompt('{"action":"ping"}', "self-loop", "chat");
+
+    expect(prompt).toContain("backend: agy");
+    expect(prompt).toContain("严格 JSON");
+    expect(prompt).not.toContain("不要包 JSON");
+  });
+
+  test("preserves the strict JSON array contract for memory distillation", () => {
+    const prompt = agyPrompt("compress this history", "distill", "full");
+
+    expect(prompt).toContain("严格 JSON 数组");
+    expect(prompt).not.toContain("不要包 JSON");
+  });
+
+  test("targets the AGY log and LaunchAgent during self-healing", () => {
+    expect(resolveSelfHealingTarget({
+      ETWIN_INSTANCE: "agy",
+      ETWIN_LLM_BACKEND: "agy",
+    })).toEqual({
+      logFile: "etwin-agy-bot.log",
+      serviceLabel: "com.etwin-agy-bot",
+    });
+
+    const previousInstance = process.env.ETWIN_INSTANCE;
+    const previousBackend = process.env.ETWIN_LLM_BACKEND;
+    try {
+      process.env.ETWIN_INSTANCE = "agy";
+      process.env.ETWIN_LLM_BACKEND = "agy";
+      const prompt = agyPrompt("inspect yourself", "reactive", "full");
+      expect(prompt).toContain("etwin-agy-bot.log");
+      expect(prompt).toContain("com.etwin-agy-bot");
+      expect(prompt).not.toContain("gui/$(id -u)/com.etwin-bot");
+    } finally {
+      if (previousInstance === undefined) delete process.env.ETWIN_INSTANCE;
+      else process.env.ETWIN_INSTANCE = previousInstance;
+      if (previousBackend === undefined) delete process.env.ETWIN_LLM_BACKEND;
+      else process.env.ETWIN_LLM_BACKEND = previousBackend;
+    }
   });
 });
 

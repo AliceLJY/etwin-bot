@@ -23,7 +23,11 @@ describe("launchd templates", () => {
       });
 
       expect(result.status).toBe(0);
-      for (const label of ["com.etwin-bot", "com.etwin-codex-bot"]) {
+      for (const label of [
+        "com.etwin-bot",
+        "com.etwin-codex-bot",
+        "com.etwin-agy-bot",
+      ]) {
         const path = join(destinationDir, `${label}.plist`);
         const contents = readFileSync(path, "utf-8");
         expect(contents).toContain(root);
@@ -36,6 +40,11 @@ describe("launchd templates", () => {
       const codex = readFileSync(join(destinationDir, "com.etwin-codex-bot.plist"), "utf-8");
       expect(codex).toContain("ETWIN_ENV_FILE");
       expect(codex).toContain(".env.codex");
+
+      const agy = readFileSync(join(destinationDir, "com.etwin-agy-bot.plist"), "utf-8");
+      expect(agy).toContain("ETWIN_ENV_FILE");
+      expect(agy).toContain(".env.agy");
+      expect(agy).toContain("etwin-agy-bot.log");
     } finally {
       rmSync(temporaryRoot, { recursive: true, force: true });
     }

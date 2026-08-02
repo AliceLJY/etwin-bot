@@ -9,7 +9,7 @@
 - **节奏主要交给模型**：bot 周期性醒来，模型结合 context、prompt policy 和互动历史决定 `ping` / `silent`
 - **操作者有确定性静默权**：`/quiet` 直接拦截 24 小时 proactive tick，不消耗 provider call；其余节奏规则留在所选 prompt/persona
 - **人格可私有定制**：公开仓提供中性模板，真实私人画像放在 gitignored 的 `.local.md`
-- **后端可切换**：默认 CC 实例走 Claude Agent SDK；Codex 实例走 `codex exec`，复用订阅而非 API key
+- **后端可切换**：支持 Claude Agent SDK、`codex exec` 和 AGY CLI；都复用各自本机登录态而非项目内 API key
 - **TG 单用户边界**：非 dry-run 启动必须配置精确的 `ALICE_CHAT_ID`，所有会进入工具链路的文字/媒体 handler 都会再次校验；应使用独立 bot token 和 chat
 
 ## 架构
@@ -33,7 +33,7 @@
                          │
                          ▼
                   ┌──────────────┐
-                  │   llm.js     │ Claude SDK / codex exec
+                  │   llm.js     │ Claude SDK / codex exec / AGY CLI
                   └──────────────┘
 ```
 
@@ -48,7 +48,8 @@ etwin-bot/
 ├── runtime-files.js          入站与生成文件的目录约束和防碰撞命名
 ├── self-loop.js              proactive 自驱：周期醒来→LLM 决策→执行
 ├── context.js                收集状态喂给 LLM
-├── llm.js                    Claude Agent SDK / codex exec 后端调用
+├── llm.js                    Claude Agent SDK / Codex / AGY 后端路由
+├── agy-backend.js            AGY CLI 调用、超时与 JSON 结果解析
 ├── image-generation.js       明确图片请求的路由
 ├── interaction.js            静默窗口与互动统计
 ├── message-split.js          Telegram 安全分段
@@ -68,6 +69,7 @@ etwin-bot/
 ├── start.sh                  dev 启动脚本
 ├── .env.example
 ├── .env.codex.example        Codex 后端实例模板
+├── .env.agy.example          AGY 后端实例模板
 └── README.md
 ```
 
@@ -103,14 +105,14 @@ bash start.sh
 这个项目刻意让个人 bot 拥有较高的宿主机能力，因此真正重要的是信任边界：
 
 - 非 dry-run 必须配置 `ALICE_CHAT_ID`，文字和媒体 handler 都会重复做精确 chat 校验。
-- Claude full 模式使用 `bypassPermissions`；Codex full 模式可以配置为 `danger-full-access`。bot 能做什么，取决于运行它的本机账户拥有什么权限。
-- TG 文件先下载到本地，再把相关 prompt / 文件交给所选 Claude 或 Codex 链路；它不是完全离线的数据流。
+- Claude full 模式使用 `bypassPermissions`；Codex full 模式可以配置为 `danger-full-access`；AGY 初版沿用 CLI 自己的默认权限，没有额外传跳过权限参数。bot 能做什么，取决于运行它的本机账户拥有什么权限。
+- TG 文件先下载到本地，再把相关 prompt / 文件交给所选 Claude、Codex 或 AGY 链路；它不是完全离线的数据流。
 - 入站文件名会先净化并约束在 `ETWIN_FILE_DIR` 内；生成图片也使用目录内、防碰撞的文件名。
 - bot token、chat ID、runtime data 和私人 `.local.md` 都不能提交到仓库，也不应把这套配置直接改成公开或多用户 bot。
 
 ## 主动节奏策略
 
-普通节奏由当前 self-decision prompt 和 persona 决定。现有 E-tuning / Codex 规则把 02:00–06:00 视为睡眠窗口；刚结束对话、近期刚 ping 或连续未读时会倾向后退，也不允许发空洞的“在吗”。这些是模型指令，具体阈值可随所选 prompt 改变；只有仍在有效期内的 `/quiet` 是代码层硬门。
+普通节奏由当前 self-decision prompt 和 persona 决定。现有 E-tuning / Codex / AGY 规则把 02:00–06:00 视为睡眠窗口；刚结束对话、近期刚 ping 或连续未读时会倾向后退，也不允许发空洞的“在吗”。这些是模型指令，具体阈值可随所选 prompt 改变；只有仍在有效期内的 `/quiet` 是代码层硬门。
 
 ## 看到 bot 走偏怎么办
 
@@ -121,10 +123,11 @@ bash start.sh
 
 ## 多实例运行
 
-当前支持两种实例：
+代码支持三种后端，每套配置使用独立的 launchd 服务身份：
 
 - `com.etwin-bot`：原 CC 版，使用 `.env`，保留 proactive。
-- `com.etwin-codex-bot`：Codex 版，使用 `.env.codex`，保留轻心跳；主动关心走 chat/self-loop，工具和图片只在明确请求时进入 full/image 链路。
+- `com.etwin-codex-bot`：Codex 版，使用 `.env.codex`。
+- `com.etwin-agy-bot`：名为 `etwin-agy` 的 AGY 版，使用 `.env.agy`，日志与数据目录也独立。
 - Codex 版收到 TG 图片时会先存入 `files-codex/`，再通过 `codex exec --image <path>` 传给后端；无 caption 的图片会暂存到下一条文字一起处理。
 
 Codex 版关键 env：
@@ -149,20 +152,36 @@ ETWIN_ENV_FILE=.env.codex bash start.sh
 
 launchd 模板见 `deploy/com.etwin-codex-bot.plist.template`。
 
+AGY 版关键 env（完整模板见 `.env.agy.example`）：
+
+```bash
+ETWIN_INSTANCE=agy
+ETWIN_DISPLAY_NAME="etwin-agy"
+ETWIN_PERSONA=agy
+ETWIN_LLM_BACKEND=agy
+ETWIN_REPLY_PROMPT=prompts/reply-agy.md
+ETWIN_SELF_PROMPT=prompts/self-decision-agy.md
+ETWIN_AGY_TIMEOUT_MS=600000
+```
+
+AGY 每轮使用新会话；最近对话已经由 E-Twin 写进 prompt，因此不会再传 `--conversation` 重复上下文。未显式设置 `ETWIN_AGY_MODEL` / `ETWIN_AGY_EFFORT` 时，沿用 AGY 本机默认模型配置。
+
+开发环境可用 `ETWIN_ENV_FILE=.env.agy bash start.sh` 启动 AGY 实例，对应 launchd 模板是 `deploy/com.etwin-agy-bot.plist.template`。
+
 ## 部署位置
 
-部署在 Mac mini 上，用 launchd 长期跑（双实例：Claude + Codex）。
-仓库中的模板只保留占位符，不保存用户名或 checkout 绝对路径。先按当前机器渲染两个 LaunchAgent，再加载需要的服务：
+部署在 Mac mini 上，由 launchd 长期运行。Claude、Codex、AGY 分别有独立模板，只需加载当前使用的 Telegram 身份。
+仓库中的模板只保留占位符，不保存用户名或 checkout 绝对路径。先按当前机器渲染 LaunchAgent，再加载需要的服务：
 
 ```bash
 ./install-launchd.sh
 launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.etwin-bot.plist" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.etwin-bot.plist"
-launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.etwin-codex-bot.plist" 2>/dev/null || true
-launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.etwin-codex-bot.plist"
+launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.etwin-agy-bot.plist" 2>/dev/null || true
+launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.etwin-agy-bot.plist"
 ```
 
-Claude SDK 调用受 `ETWIN_CLAUDE_TIMEOUT_MS` 限制，默认 10 分钟，到期会主动 abort。self-loop 不允许重入：上一条主动调用仍未结束时，下一次定时 tick 会跳过，不会再发起第二条模型调用。
+Claude SDK 调用受 `ETWIN_CLAUDE_TIMEOUT_MS` 限制。`ETWIN_AGY_TIMEOUT_MS` 是 AGY CLI 的 soft timeout，默认 10 分钟；Node 外层会再等 60 秒，只在进程确实卡住时终止。self-loop 不允许重入：上一条主动调用仍未结束时，下一次定时 tick 会跳过，不会再发起第二条模型调用。
 
 ## 不做什么
 

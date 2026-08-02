@@ -55,8 +55,11 @@ async function downloadTGFile(ctx, fileId, filename) {
   return localPath;
 }
 
-const DEFAULT_REPLY_PROMPT =
-  process.env.ETWIN_PERSONA === "codex" ? "prompts/reply-codex.md" : "prompts/reply.md";
+const DEFAULT_REPLY_PROMPT = process.env.ETWIN_PERSONA === "codex"
+  ? "prompts/reply-codex.md"
+  : process.env.ETWIN_PERSONA === "agy"
+    ? "prompts/reply-agy.md"
+    : "prompts/reply.md";
 const REPLY_PROMPT_PATH = join(PROJECT_DIR, process.env.ETWIN_REPLY_PROMPT || DEFAULT_REPLY_PROMPT);
 const CONV_HISTORY_PATH = dataPath("conversation-history.json");
 const PENDING_MEDIA_PATH = dataPath("pending-media.json");
@@ -66,7 +69,9 @@ const ALICE_CHAT_ID = process.env.ALICE_CHAT_ID;
 const DRY_RUN = process.env.ETWIN_DRY_RUN === "true";
 const PROACTIVE_ENABLED = process.env.ETWIN_PROACTIVE !== "false";
 const RUN_ON_START = process.env.ETWIN_RUN_ON_START !== "false";
-const BOT_DISPLAY_NAME = process.env.ETWIN_DISPLAY_NAME || (INSTANCE_ID === "codex" ? "Codex Twin" : "E-Twin");
+const BOT_DISPLAY_NAME = process.env.ETWIN_DISPLAY_NAME || (
+  process.env.ETWIN_LLM_BACKEND === "agy" ? "etwin-agy" : INSTANCE_ID === "codex" ? "Codex Twin" : "E-Twin"
+);
 
 function parseIntegerEnv(value, fallback, min = 0) {
   const parsed = parseInt(value, 10);

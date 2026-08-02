@@ -1,7 +1,7 @@
 {
   "name": "etwin-bot",
   "version": "0.2.0",
-  "description": "Single-user proactive Telegram companion with Claude Agent SDK and Codex backends.",
+  "description": "Single-user proactive Telegram companion with Claude Agent SDK, Codex, and AGY backends.",
   "type": "module",
   "main": "bot.js",
   "scripts": {

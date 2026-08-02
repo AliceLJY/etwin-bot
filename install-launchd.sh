@@ -42,7 +42,7 @@ def render(value: Any) -> Any:
     return value
 
 
-for label in ("com.etwin-bot", "com.etwin-codex-bot"):
+for label in ("com.etwin-bot", "com.etwin-codex-bot", "com.etwin-agy-bot"):
     template = root / "deploy" / f"{label}.plist.template"
     destination = destination_dir / f"{label}.plist"
     rendered = render(plistlib.loads(template.read_bytes()))
@@ -68,5 +68,6 @@ PY
 if command -v plutil >/dev/null 2>&1; then
   plutil -lint \
     "$DESTINATION_DIR/com.etwin-bot.plist" \
-    "$DESTINATION_DIR/com.etwin-codex-bot.plist" >/dev/null
+    "$DESTINATION_DIR/com.etwin-codex-bot.plist" \
+    "$DESTINATION_DIR/com.etwin-agy-bot.plist" >/dev/null
 fi

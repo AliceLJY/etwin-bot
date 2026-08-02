@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.etwin-agy-bot</string>
+
+	<key>WorkingDirectory</key>
+	<string>__ETWIN_ROOT__</string>
+
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>__ETWIN_ROOT__/start.sh</string>
+	</array>
+
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>__ETWIN_HOME__/.bun/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+		<key>HOME</key>
+		<string>__ETWIN_HOME__</string>
+		<key>ETWIN_ENV_FILE</key>
+		<string>.env.agy</string>
+		<key>HTTPS_PROXY</key>
+		<string>http://127.0.0.1:7890</string>
+		<key>HTTP_PROXY</key>
+		<string>http://127.0.0.1:7890</string>
+		<key>ALL_PROXY</key>
+		<string>http://127.0.0.1:7890</string>
+	</dict>
+
+	<key>RunAtLoad</key>
+	<true/>
+
+	<key>KeepAlive</key>
+	<true/>
+
+	<key>StandardOutPath</key>
+	<string>__ETWIN_ROOT__/etwin-agy-bot.log</string>
+
+	<key>StandardErrorPath</key>
+	<string>__ETWIN_ROOT__/etwin-agy-bot.log</string>
+
+	<key>ExitTimeOut</key>
+	<integer>30</integer>
+</dict>
+</plist>

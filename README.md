@@ -4,14 +4,14 @@
 
 **English** | [中文](README_CN.md)
 
-etwin-bot wakes on a configurable timer, gives recent conversation and interaction context to a Claude or Codex backend, and lets the model decide whether to reach out or stay quiet. Cadence is mostly model-led, but not absolute: an explicit `/quiet` command is enforced in code for 24 hours before any LLM call.
+etwin-bot wakes on a configurable timer, gives recent conversation and interaction context to a Claude, Codex, or AGY backend, and lets the model decide whether to reach out or stay quiet. Cadence is mostly model-led, but not absolute: an explicit `/quiet` command is enforced in code for 24 hours before any LLM call.
 
 ## Design Principles
 
 - **Model-led cadence.** The bot wakes periodically; the model reads current context, prompt policy, and interaction history before choosing `ping` or `silent`.
 - **Deterministic owner override.** `/quiet` blocks proactive ticks for 24 hours without spending a provider call. Other cadence guidance stays in the selected prompt/persona.
 - **Personal persona.** The public repo ships neutral templates; private profile details can live in gitignored `.local.md` overrides.
-- **Swappable backend.** The default instance runs on the Claude Agent SDK; a second instance runs on `codex exec`, reusing a Codex subscription instead of an API key.
+- **Swappable backend.** Claude Agent SDK, `codex exec`, and the AGY CLI are supported. Each uses its existing host login instead of a project API key.
 - **Single-user Telegram boundary.** Non-dry-run startup requires an exact `ALICE_CHAT_ID`, and every tool-bearing text/media handler checks it. Use a dedicated bot token and chat.
 
 ## Architecture
@@ -35,7 +35,7 @@ etwin-bot wakes on a configurable timer, gives recent conversation and interacti
                          │
                          ▼
                   ┌──────────────┐
-                  │   llm.js     │ Claude SDK / codex exec
+                  │   llm.js     │ Claude SDK / codex exec / AGY CLI
                   └──────────────┘
 ```
 
@@ -50,7 +50,8 @@ etwin-bot/
 ├── runtime-files.js          contained, collision-resistant inbound/output paths
 ├── self-loop.js              proactive driver: wake → LLM decides → act
 ├── context.js                collects state to feed the LLM
-├── llm.js                    backend call (Claude SDK / codex exec)
+├── llm.js                    Claude SDK / Codex / AGY backend routing
+├── agy-backend.js            AGY CLI invocation, timeout, and JSON parsing
 ├── image-generation.js       explicit image request routing
 ├── interaction.js            quiet-window and reaction statistics
 ├── message-split.js          Telegram-safe response segmentation
@@ -70,6 +71,7 @@ etwin-bot/
 ├── start.sh                  dev launch script
 ├── .env.example
 ├── .env.codex.example        Codex-backend instance template
+├── .env.agy.example          AGY-backend instance template
 └── README.md
 ```
 
@@ -105,14 +107,14 @@ bash start.sh
 This project intentionally gives a personal bot meaningful host access, so the trust boundary matters more than the bot UI:
 
 - `ALICE_CHAT_ID` is mandatory outside dry-run, and media/text handlers repeat the same exact-chat check.
-- Claude full mode uses `bypassPermissions`; Codex full mode can be configured as `danger-full-access`. The bot can therefore act with the permissions of the host account.
-- Telegram files are downloaded locally, then relevant prompts/files are sent to the selected Claude or Codex path. This is not an offline-only data flow.
+- Claude full mode uses `bypassPermissions`; Codex full mode can be configured as `danger-full-access`; the initial AGY path keeps the CLI's default permissions and does not pass a permission-bypass flag. The bot can therefore act with the permissions available to the host account and selected backend.
+- Telegram files are downloaded locally, then relevant prompts/files are sent to the selected Claude, Codex, or AGY path. This is not an offline-only data flow.
 - Inbound names are sanitized and resolved under `ETWIN_FILE_DIR`; generated image outputs use contained, collision-resistant names.
 - Keep the bot token, chat ID, runtime data, and private `.local.md` files out of the repository. Do not reuse this configuration as a public or multi-user bot.
 
 ## Cadence Policy
 
-The selected self-decision prompt and persona carry the ordinary timing policy. The current E-tuning/Codex guidance treats 02:00–06:00 as a sleep window, backs off after recent conversation or repeated unread pings, and rejects empty check-ins. These are model instructions and can vary by prompt; only an active `/quiet` request is a deterministic code gate.
+The selected self-decision prompt and persona carry the ordinary timing policy. The current E-tuning, Codex, and AGY guidance treats 02:00–06:00 as a sleep window, backs off after recent conversation or repeated unread pings, and rejects empty check-ins. These are model instructions and can vary by prompt; only an active `/quiet` request is a deterministic code gate.
 
 ## When the Bot Drifts
 
@@ -123,10 +125,11 @@ The selected self-decision prompt and persona carry the ordinary timing policy. 
 
 ## Multiple Instances
 
-Two instance types are supported:
+Three backends are supported, with a separate launchd service identity for each configuration:
 
 - **`com.etwin-bot`** — the original Claude-backed version, uses `.env`, keeps proactive mode.
-- **`com.etwin-codex-bot`** — the Codex-backed version, uses `.env.codex`, keeps a light heartbeat; proactive outreach runs through the chat/self-loop, while tools and images enter the full/image path only on explicit request.
+- **`com.etwin-codex-bot`** — the Codex version, loading `.env.codex`.
+- **`com.etwin-agy-bot`** — the AGY version named `etwin-agy`, loading `.env.agy` and using separate logs and data directories.
 
 The Codex version stores incoming Telegram images in `files-codex/` and passes them to the backend via `codex exec --image <path>`; an image with no caption is held until the next text message.
 
@@ -152,23 +155,40 @@ ETWIN_ENV_FILE=.env.codex bash start.sh
 
 The launchd template is at `deploy/com.etwin-codex-bot.plist.template`.
 
+Key AGY env (see `.env.agy.example` for the complete template):
+
+```bash
+ETWIN_INSTANCE=agy
+ETWIN_DISPLAY_NAME="etwin-agy"
+ETWIN_PERSONA=agy
+ETWIN_LLM_BACKEND=agy
+ETWIN_REPLY_PROMPT=prompts/reply-agy.md
+ETWIN_SELF_PROMPT=prompts/self-decision-agy.md
+ETWIN_AGY_TIMEOUT_MS=600000
+```
+
+AGY starts a fresh conversation for every call. E-Twin already places recent Telegram history in the prompt, so it does not pass `--conversation` and duplicate that context. If `ETWIN_AGY_MODEL` and `ETWIN_AGY_EFFORT` are unset, the host AGY defaults are used.
+
+Launch a development AGY instance with `ETWIN_ENV_FILE=.env.agy bash start.sh`. Its launchd template is `deploy/com.etwin-agy-bot.plist.template`.
+
 ## Deployment
 
-Runs on a Mac mini under launchd for the long haul (two instances: Claude + Codex).
+Runs on a Mac mini under launchd. Claude, Codex, and AGY have separate templates, while only the desired Telegram identities need to be loaded.
 The tracked templates contain placeholders rather than a username or checkout
-path. Render both LaunchAgents for the current machine, then load the desired
+path. Render the LaunchAgents for the current machine, then load the desired
 services:
 
 ```bash
 ./install-launchd.sh
 launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.etwin-bot.plist" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.etwin-bot.plist"
-launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.etwin-codex-bot.plist" 2>/dev/null || true
-launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.etwin-codex-bot.plist"
+launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.etwin-agy-bot.plist" 2>/dev/null || true
+launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.etwin-agy-bot.plist"
 ```
 
-Claude SDK calls are aborted after `ETWIN_CLAUDE_TIMEOUT_MS` (ten minutes by
-default). Timer ticks are non-overlapping: a still-running proactive call makes
+Claude SDK calls are aborted after `ETWIN_CLAUDE_TIMEOUT_MS`. `ETWIN_AGY_TIMEOUT_MS`
+is the AGY CLI's soft timeout (ten minutes by default); the Node wrapper allows one
+additional minute before terminating a stuck process. Timer ticks are non-overlapping: a still-running proactive call makes
 the next scheduled tick skip instead of starting a second model call.
 
 ## Non-Goals

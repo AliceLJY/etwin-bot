@@ -1,5 +1,4 @@
-// llm.js — Claude Agent SDK 调用 + session resume 让 cache 复用
-// 取代旧版的 spawn `claude -p` 子进程模式
+// llm.js — Claude Agent SDK / Codex / AGY 后端路由
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
@@ -8,6 +7,7 @@ import { homedir } from "os";
 import { spawn } from "child_process";
 import { DATA_DIR, PROJECT_DIR, dataPath, ensureRuntimeDirs, readPromptFile } from "./paths.js";
 import { TOOL_MODE_CHAT, TOOL_MODE_FULL, normalizeToolMode } from "./tool-mode.js";
+import { resolveAgyTimeoutMs, runAgyCli } from "./agy-backend.js";
 
 ensureRuntimeDirs();
 
@@ -221,14 +221,14 @@ const ETWIN_OPS_DISCIPLINE = `
 
 你出问题时，自己排自己修，不要让 Alice 当转述员去叫 CC。流程：
 
-1. **诊断**：看自己日志 \`tail -100 ~/Projects/etwin-bot/etwin-bot.log\`、ps 自己进程、ls 自己代码、grep 错误关键词
+1. **诊断**：看自己日志 \`tail -100 ~/Projects/etwin-bot/__ETWIN_LOG_FILE__\`、ps 自己进程、ls 自己代码、grep 错误关键词
 2. **修改**：改自己 \`~/Projects/etwin-bot/\` 下的代码。**改前先 \`cp llm.js llm.js.bak\` 备份**（self-rollback 的安全网）
 3. **校验**：syntax check \`bun -e "import('./llm.js').then(()=>console.log('ok')).catch(e=>{console.error(e);process.exit(1)})"\`
-4. **提交**：\`git add . && git commit -m "fix: ..."\`（etwin-bot 没 remote，不需要 push）
-5. **重启自己**：\`launchctl kickstart -k gui/\$(id -u)/com.etwin-bot\`。KeepAlive=true 自动起新进程加载新代码。
-6. **rollback 兜底**：若新进程启动失败/反复 crash，\`mv llm.js.bak llm.js && launchctl kickstart -k ...\` 回退到上一版。
+4. **提交**：只提交自己的相关改动；推送 main 前仍按上面的规则先问 Alice。
+5. **重启自己**：\`launchctl kickstart -k gui/\$(id -u)/__ETWIN_SERVICE_LABEL__\`。KeepAlive=true 自动起新进程加载新代码。
+6. **rollback 兜底**：若新进程启动失败/反复 crash，\`mv llm.js.bak llm.js && launchctl kickstart -k gui/\$(id -u)/__ETWIN_SERVICE_LABEL__\` 回退到上一版。
 
-修自己（\`~/Projects/etwin-bot/\` 范围、自己的 \`com.etwin-bot\` launchd 服务）**不需要问 Alice**——这是设计意图。
+修自己（\`~/Projects/etwin-bot/\` 范围、自己的 \`__ETWIN_SERVICE_LABEL__\` launchd 服务）**不需要问 Alice**——这是设计意图。
 
 但**操作别人的东西要先问 Alice**：
 - 别人的 launchd 服务（telegram-ai-bridge / hermes-aws / 其他 bot）
@@ -237,6 +237,25 @@ const ETWIN_OPS_DISCIPLINE = `
 - 任何会影响 Alice 主力工作流的事
 
 简言之：自己的家自己收拾；别人的地盘进去先敲门。`;
+
+export function resolveSelfHealingTarget(env = process.env) {
+  const instance = String(env.ETWIN_INSTANCE || "").trim().toLowerCase();
+  const backend = String(env.ETWIN_LLM_BACKEND || LLM_BACKEND).trim().toLowerCase();
+  if (instance === "agy" || backend === "agy") {
+    return { logFile: "etwin-agy-bot.log", serviceLabel: "com.etwin-agy-bot" };
+  }
+  if (instance === "codex" || backend === "codex") {
+    return { logFile: "etwin-codex-bot.log", serviceLabel: "com.etwin-codex-bot" };
+  }
+  return { logFile: "etwin-bot.log", serviceLabel: "com.etwin-bot" };
+}
+
+function buildOpsDiscipline(env = process.env) {
+  const target = resolveSelfHealingTarget(env);
+  return ETWIN_OPS_DISCIPLINE
+    .replaceAll("__ETWIN_LOG_FILE__", target.logFile)
+    .replaceAll("__ETWIN_SERVICE_LABEL__", target.serviceLabel);
+}
 
 const ETWIN_CHAT_DISCIPLINE = `
 
@@ -252,10 +271,13 @@ const ETWIN_CHAT_DISCIPLINE = `
 
 // 读 persona 三件套 + 追加 long-term-memory 拼成 system prompt append
 export function buildSystemPrompt(toolMode = TOOL_MODE_FULL) {
-  const personaMode = process.env.ETWIN_PERSONA || (LLM_BACKEND === "codex" ? "codex" : "etwin");
+  const backendPersona = LLM_BACKEND === "codex" ? "codex" : LLM_BACKEND === "agy" ? "agy" : "etwin";
+  const personaMode = process.env.ETWIN_PERSONA || backendPersona;
   let personaPrompt;
   if (personaMode === "codex") {
     personaPrompt = readPromptFile(join(PROJECT_DIR, "persona/codex-tuning.md"));
+  } else if (personaMode === "agy") {
+    personaPrompt = readPromptFile(join(PROJECT_DIR, "persona/agy-tuning.md"));
   } else if (personaMode === "cc") {
     personaPrompt = readPromptFile(join(PROJECT_DIR, "persona/cc-tuning.md"));
   } else {
@@ -286,7 +308,7 @@ export function buildSystemPrompt(toolMode = TOOL_MODE_FULL) {
   }
 
   const mode = normalizeToolMode(toolMode);
-  const discipline = mode === TOOL_MODE_FULL ? ETWIN_OPS_DISCIPLINE : ETWIN_CHAT_DISCIPLINE;
+  const discipline = mode === TOOL_MODE_FULL ? buildOpsDiscipline() : ETWIN_CHAT_DISCIPLINE;
   return `${personaPrompt}${memorySection}${discipline}`;
 }
 
@@ -314,6 +336,53 @@ ${userPrompt}
 # 输出约束
 
 ${outputConstraints}`;
+}
+
+export function agyPrompt(userPrompt, kind, toolMode) {
+  const mode = normalizeToolMode(toolMode);
+  const outputConstraints = kind === "self-loop"
+    ? "只输出 self-decision prompt 要求的严格 JSON 对象。不要 markdown，不要解释。"
+    : kind === "distill"
+      ? "只输出 distill prompt 要求的严格 JSON 数组。不要 markdown，不要解释，不要添加数组外文本。"
+      : "只输出要发给 Alice 的内容。不要解释调用链路，不要写 markdown 标题，不要包 JSON。";
+
+  return `${buildSystemPrompt(toolMode)}
+
+---
+
+# 当前 Telegram 回合
+
+- backend: agy
+- kind: ${kind}
+- task_intent: ${mode === TOOL_MODE_FULL ? "work-with-tools-if-needed" : "conversation"}
+
+${userPrompt}
+
+---
+
+# 输出约束
+
+${outputConstraints}`;
+}
+
+async function callAgyExec(userPrompt, opts = {}) {
+  const dryRun = opts.dryRun || process.env.ETWIN_DRY_RUN === "true";
+  const kind = opts.kind || "reactive";
+  const toolMode = normalizeToolMode(opts.toolMode || TOOL_MODE_CHAT);
+  if (dryRun) {
+    console.log(`[agy dry-run kind=${kind} toolMode=${toolMode}] prompt 长度:`, userPrompt.length);
+    return kind === "self-loop"
+      ? JSON.stringify({ action: "silent", message: "", reasoning: "[dry-run mock] agy backend", next_check_hint: "4_hours" })
+      : "[dry-run] 当前是 AGY dry-run 模式，未真调 LLM。";
+  }
+
+  const timeoutMs = parsePositiveInteger(opts.timeoutMs, resolveAgyTimeoutMs());
+  console.log(`[agy] exec kind=${kind} toolMode=${toolMode} timeout=${timeoutMs}`);
+  return runAgyCli(agyPrompt(userPrompt, kind, toolMode), {
+    cwd: PROJECT_DIR,
+    env: process.env,
+    timeoutMs,
+  });
 }
 
 function spawnCodex(args, input, timeoutMs) {
@@ -478,6 +547,9 @@ function saveSessionId(kind, sessionId) {
 // opts.fresh: 不 resume，强制新 session
 // 返回 string（assistant 输出的文本）
 export async function callClaudeSDK(userPrompt, opts = {}) {
+  if (LLM_BACKEND === "agy") {
+    return await callAgyExec(userPrompt, opts);
+  }
   if (LLM_BACKEND === "codex") {
     return await callCodexExec(userPrompt, opts);
   }
