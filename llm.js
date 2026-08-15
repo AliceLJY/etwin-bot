@@ -8,6 +8,7 @@ import { spawn } from "child_process";
 import { DATA_DIR, PROJECT_DIR, dataPath, ensureRuntimeDirs, readPromptFile } from "./paths.js";
 import { TOOL_MODE_CHAT, TOOL_MODE_FULL, normalizeToolMode } from "./tool-mode.js";
 import { resolveAgyTimeoutMs, runAgyCli } from "./agy-backend.js";
+import { resolveKimiTimeoutMs, runKimiCli } from "./kimi-backend.js";
 
 ensureRuntimeDirs();
 
@@ -338,7 +339,7 @@ ${userPrompt}
 ${outputConstraints}`;
 }
 
-export function agyPrompt(userPrompt, kind, toolMode) {
+function cliBackendPrompt(backend, userPrompt, kind, toolMode) {
   const mode = normalizeToolMode(toolMode);
   const outputConstraints = kind === "self-loop"
     ? "只输出 self-decision prompt 要求的严格 JSON 对象。不要 markdown，不要解释。"
@@ -352,7 +353,7 @@ export function agyPrompt(userPrompt, kind, toolMode) {
 
 # 当前 Telegram 回合
 
-- backend: agy
+- backend: ${backend}
 - kind: ${kind}
 - task_intent: ${mode === TOOL_MODE_FULL ? "work-with-tools-if-needed" : "conversation"}
 
@@ -363,6 +364,14 @@ ${userPrompt}
 # 输出约束
 
 ${outputConstraints}`;
+}
+
+export function agyPrompt(userPrompt, kind, toolMode) {
+  return cliBackendPrompt("agy", userPrompt, kind, toolMode);
+}
+
+export function kimiPrompt(userPrompt, kind, toolMode) {
+  return cliBackendPrompt("kimi", userPrompt, kind, toolMode);
 }
 
 async function callAgyExec(userPrompt, opts = {}) {
@@ -380,6 +389,27 @@ async function callAgyExec(userPrompt, opts = {}) {
   console.log(`[agy] exec kind=${kind} toolMode=${toolMode} timeout=${timeoutMs}`);
   return runAgyCli(agyPrompt(userPrompt, kind, toolMode), {
     cwd: PROJECT_DIR,
+    env: process.env,
+    timeoutMs,
+  });
+}
+
+async function callKimiExec(userPrompt, opts = {}) {
+  const dryRun = opts.dryRun || process.env.ETWIN_DRY_RUN === "true";
+  const kind = opts.kind || "reactive";
+  const toolMode = normalizeToolMode(opts.toolMode || TOOL_MODE_CHAT);
+  if (dryRun) {
+    console.log(`[kimi dry-run kind=${kind} toolMode=${toolMode}] prompt 长度:`, userPrompt.length);
+    return kind === "self-loop"
+      ? JSON.stringify({ action: "silent", message: "", reasoning: "[dry-run mock] kimi backend", next_check_hint: "4_hours" })
+      : "[dry-run] 当前是 Kimi dry-run 模式，未真调 LLM。";
+  }
+
+  const timeoutMs = parsePositiveInteger(opts.timeoutMs, resolveKimiTimeoutMs());
+  console.log(`[kimi] exec kind=${kind} toolMode=${toolMode} timeout=${timeoutMs}`);
+  return runKimiCli(kimiPrompt(userPrompt, kind, toolMode), {
+    cwd: PROJECT_DIR,
+    dataDir: DATA_DIR,
     env: process.env,
     timeoutMs,
   });
@@ -549,6 +579,9 @@ function saveSessionId(kind, sessionId) {
 export async function callClaudeSDK(userPrompt, opts = {}) {
   if (LLM_BACKEND === "agy") {
     return await callAgyExec(userPrompt, opts);
+  }
+  if (LLM_BACKEND === "kimi") {
+    return await callKimiExec(userPrompt, opts);
   }
   if (LLM_BACKEND === "codex") {
     return await callCodexExec(userPrompt, opts);
