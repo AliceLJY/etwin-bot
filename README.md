@@ -4,14 +4,14 @@
 
 **English** | [中文](README_CN.md)
 
-etwin-bot wakes on a configurable timer, gives recent conversation and interaction context to a Claude, Codex, or AGY backend, and lets the model decide whether to reach out or stay quiet. Cadence is mostly model-led, but not absolute: an explicit `/quiet` command is enforced in code for 24 hours before any LLM call.
+etwin-bot wakes on a configurable timer, gives recent conversation and interaction context to a Claude, Codex, AGY, or Kimi backend, and lets the model decide whether to reach out or stay quiet. Cadence is mostly model-led, but not absolute: an explicit `/quiet` command is enforced in code for 24 hours before any LLM call.
 
 ## Design Principles
 
 - **Model-led cadence.** The bot wakes periodically; the model reads current context, prompt policy, and interaction history before choosing `ping` or `silent`.
 - **Deterministic owner override.** `/quiet` blocks proactive ticks for 24 hours without spending a provider call. Other cadence guidance stays in the selected prompt/persona.
-- **Personal persona.** The public repo ships neutral templates; private profile details can live in gitignored `.local.md` overrides.
-- **Swappable backend.** Claude Agent SDK, `codex exec`, and the AGY CLI are supported. Each uses its existing host login instead of a project API key.
+- **Personal persona.** The tracked `persona/` and `prompts/` files are the author's own working examples (only the two digital-clone files are neutral templates); replace them with your own, and keep private tuning in gitignored `.local.md` overrides.
+- **Swappable backend.** Claude Agent SDK, `codex exec`, the AGY CLI, and the Kimi CLI are supported. Each uses its existing host login instead of a project API key.
 - **Single-user Telegram boundary.** Non-dry-run startup requires an exact `ALICE_CHAT_ID`, and every tool-bearing text/media handler checks it. Use a dedicated bot token and chat.
 
 ## Architecture

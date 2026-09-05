@@ -8,8 +8,8 @@
 
 - **节奏主要交给模型**：bot 周期性醒来，模型结合 context、prompt policy 和互动历史决定 `ping` / `silent`
 - **操作者有确定性静默权**：`/quiet` 直接拦截 24 小时 proactive tick，不消耗 provider call；其余节奏规则留在所选 prompt/persona
-- **人格可私有定制**：公开仓提供中性模板，真实私人画像放在 gitignored 的 `.local.md`
-- **后端可切换**：支持 Claude Agent SDK、`codex exec` 和 AGY CLI；都复用各自本机登录态而非项目内 API key
+- **人格可私有定制**：仓库跟踪的 `persona/` 与 `prompts/` 文件是作者自己在用的示例（只有两个 digital-clone 文件是中性模板），使用者应替换成自己的；私人调节放在 gitignored 的 `.local.md`
+- **后端可切换**：支持 Claude Agent SDK、`codex exec`、AGY CLI 和 Kimi CLI；都复用各自本机登录态而非项目内 API key
 - **TG 单用户边界**：非 dry-run 启动必须配置精确的 `ALICE_CHAT_ID`，所有会进入工具链路的文字/媒体 handler 都会再次校验；应使用独立 bot token 和 chat
 
 ## 架构
