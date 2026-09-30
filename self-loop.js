@@ -6,7 +6,7 @@ import { join } from "path";
 import { gatherContext, loadActionLog, recentActions, interactionStats } from "./context.js";
 import { callMiniCC, parseDecisionJSON } from "./llm.js";
 import { PROJECT_DIR, dataPath, ensureRuntimeDirs, readPromptFile } from "./paths.js";
-import { classifyReactionDelay, activeQuietUntil } from "./interaction.js";
+import { classifyReactionDelay, activeQuietUntil, parseQuietHours, isInQuietHours } from "./interaction.js";
 
 ensureRuntimeDirs();
 
@@ -15,6 +15,10 @@ const SELF_DECISION_PROMPT_PATH = join(PROJECT_DIR, process.env.ETWIN_SELF_PROMP
 
 // 唤醒间隔（仅是检查间隔，不是发送间隔——LLM 决定真发）
 const WAKE_INTERVAL_MS = parseInt(process.env.ETWIN_WAKE_INTERVAL_MS || String(30 * 60 * 1000), 10);
+
+// 夜间静默时段（如 "0-8"）：时段内 tick 直接跳过、不调 LLM；Alice 主动发消息不受影响
+const QUIET_HOURS_SPEC = process.env.ETWIN_QUIET_HOURS || "";
+const QUIET_HOURS = parseQuietHours(QUIET_HOURS_SPEC);
 
 function appendAction(action) {
   let log = [];
@@ -45,6 +49,12 @@ export async function selfTick({ sendMessage, dryRun = false } = {}) {
   const quietUntil = activeQuietUntil(loadActionLog());
   if (quietUntil) {
     console.log(`[self-loop] 处于 /quiet 静默期至 ${quietUntil}，跳过本次 tick`);
+    return null;
+  }
+
+  // 硬保证：夜间静默时段内同样直接 silent，不调 LLM
+  if (isInQuietHours(QUIET_HOURS)) {
+    console.log(`[self-loop] 处于夜间静默时段 ${QUIET_HOURS_SPEC}，跳过本次 tick`);
     return null;
   }
 
@@ -174,7 +184,10 @@ export function createNonOverlappingTickRunner(runTick, onError = console.error)
 
 // 启动 self-loop
 export function startSelfLoop({ sendMessage, dryRun = false, runOnStart = true } = {}) {
-  console.log(`[self-loop] 启动 — interval=${WAKE_INTERVAL_MS}ms dryRun=${dryRun} runOnStart=${runOnStart}`);
+  console.log(`[self-loop] 启动 — interval=${WAKE_INTERVAL_MS}ms dryRun=${dryRun} runOnStart=${runOnStart} quietHours=${QUIET_HOURS ? QUIET_HOURS_SPEC : "off"}`);
+  if (QUIET_HOURS_SPEC && !QUIET_HOURS) {
+    console.warn(`[self-loop] ETWIN_QUIET_HOURS="${QUIET_HOURS_SPEC}" 格式不对（应为 "0-8" 这样），已忽略`);
+  }
   const runTick = createNonOverlappingTickRunner(
     () => selfTick({ sendMessage, dryRun }),
     (error) => console.error("[self-loop] tick 异常:", error),

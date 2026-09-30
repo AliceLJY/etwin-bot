@@ -16,6 +16,26 @@ export function activeQuietUntil(log, now = Date.now()) {
   return null;
 }
 
+// 解析夜间静默时段 ETWIN_QUIET_HOURS，形如 "0-8"（本地时间，含起点不含终点），可跨午夜如 "23-7"。
+// 空值或格式不对返回 null = 不静默
+export function parseQuietHours(spec) {
+  const m = String(spec ?? "").trim().match(/^(\d{1,2})\s*-\s*(\d{1,2})$/);
+  if (!m) return null;
+  const start = Number(m[1]);
+  const end = Number(m[2]);
+  if (start > 23 || end > 24 || start === end) return null;
+  return { start, end };
+}
+
+// 某时刻是否落在静默时段内（按进程本地时区的小时判断）
+export function isInQuietHours(window, date = new Date()) {
+  if (!window) return false;
+  const h = date.getHours();
+  return window.start < window.end
+    ? h >= window.start && h < window.end
+    : h >= window.start || h < window.end;
+}
+
 // 算 Alice 互动率。状态三态：engaged（及时回）/ delayed（迟回）/ unread（还没回），
 // 全部由 markAliceReaction 真实写入。旧版 seen_no_reply 恒 0、是伪状态，已删。
 export function computeInteractionStats(log, days = 7, now = Date.now()) {

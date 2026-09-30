@@ -4,12 +4,12 @@
 
 **English** | [中文](README_CN.md)
 
-etwin-bot wakes on a configurable timer, gives recent conversation and interaction context to a Claude, Codex, AGY, or Kimi backend, and lets the model decide whether to reach out or stay quiet. Cadence is mostly model-led, but not absolute: an explicit `/quiet` command is enforced in code for 24 hours before any LLM call.
+etwin-bot wakes on a configurable timer, gives recent conversation and interaction context to a Claude, Codex, AGY, or Kimi backend, and lets the model decide whether to reach out or stay quiet. Cadence is mostly model-led, but not absolute: an explicit `/quiet` command is enforced in code for 24 hours before any LLM call, and an optional nightly window (`ETWIN_QUIET_HOURS`) is enforced the same way.
 
 ## Design Principles
 
 - **Model-led cadence.** The bot wakes periodically; the model reads current context, prompt policy, and interaction history before choosing `ping` or `silent`.
-- **Deterministic owner override.** `/quiet` blocks proactive ticks for 24 hours without spending a provider call. Other cadence guidance stays in the selected prompt/persona.
+- **Deterministic owner override.** `/quiet` blocks proactive ticks for 24 hours without spending a provider call; an optional nightly window (`ETWIN_QUIET_HOURS`, e.g. `0-8`) skips ticks the same way. Other cadence guidance stays in the selected prompt/persona.
 - **Personal persona.** The tracked `persona/` and `prompts/` files are the author's own working examples (only the two digital-clone files are neutral templates); replace them with your own, and keep private tuning in gitignored `.local.md` overrides.
 - **Swappable backend.** Claude Agent SDK, `codex exec`, the AGY CLI, and the Kimi CLI are supported. Each uses its existing host login instead of a project API key.
 - **Single-user Telegram boundary.** Non-dry-run startup requires an exact `ALICE_CHAT_ID`, and every tool-bearing text/media handler checks it. Use a dedicated bot token and chat.
@@ -114,7 +114,7 @@ This project intentionally gives a personal bot meaningful host access, so the t
 
 ## Cadence Policy
 
-The selected self-decision prompt and persona carry the ordinary timing policy. The current E-tuning, Codex, and AGY guidance treats 02:00–06:00 as a sleep window, backs off after recent conversation or repeated unread pings, and rejects empty check-ins. These are model instructions and can vary by prompt; only an active `/quiet` request is a deterministic code gate.
+The selected self-decision prompt and persona carry the ordinary timing policy. The current E-tuning, Codex, and AGY guidance treats 02:00–06:00 as a sleep window, backs off after recent conversation or repeated unread pings, and rejects empty check-ins. These are model instructions and can vary by prompt. There are two deterministic code gates: an active `/quiet` request, and, when set, the `ETWIN_QUIET_HOURS` window (local time, start inclusive, end exclusive, may wrap past midnight such as `23-7`). Inside either one a tick returns before any LLM call; replies to your own messages keep working.
 
 ## When the Bot Drifts
 

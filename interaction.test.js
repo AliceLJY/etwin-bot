@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { classifyReactionDelay, activeQuietUntil, computeInteractionStats } from "./interaction.js";
+import { classifyReactionDelay, activeQuietUntil, computeInteractionStats, parseQuietHours, isInQuietHours } from "./interaction.js";
 
 const H = 3600_000;
 const NOW = 1_700_000_000_000;
@@ -37,6 +37,40 @@ describe("activeQuietUntil", () => {
       { action: "quiet_request", quiet_until: active },
     ];
     expect(activeQuietUntil(log, NOW)).toBe(active);
+  });
+});
+
+describe("parseQuietHours", () => {
+  test("解析普通时段与跨午夜时段", () => {
+    expect(parseQuietHours("0-8")).toEqual({ start: 0, end: 8 });
+    expect(parseQuietHours(" 23 - 7 ")).toEqual({ start: 23, end: 7 });
+    expect(parseQuietHours("22-24")).toEqual({ start: 22, end: 24 });
+  });
+  test("空值或格式不对返回 null", () => {
+    for (const bad of [undefined, "", "abc", "8-8", "25-3", "0-25", "0:00-8:00"]) {
+      expect(parseQuietHours(bad)).toBeNull();
+    }
+  });
+});
+
+describe("isInQuietHours", () => {
+  const at = (h, m = 0) => new Date(2026, 8, 30, h, m);
+  test("0-8：零点到 7:59 静默，8 点起恢复", () => {
+    const w = parseQuietHours("0-8");
+    expect(isInQuietHours(w, at(0, 0))).toBe(true);
+    expect(isInQuietHours(w, at(7, 59))).toBe(true);
+    expect(isInQuietHours(w, at(8, 0))).toBe(false);
+    expect(isInQuietHours(w, at(23, 59))).toBe(false);
+  });
+  test("23-7：跨午夜两段都静默", () => {
+    const w = parseQuietHours("23-7");
+    expect(isInQuietHours(w, at(23, 30))).toBe(true);
+    expect(isInQuietHours(w, at(3, 0))).toBe(true);
+    expect(isInQuietHours(w, at(7, 0))).toBe(false);
+    expect(isInQuietHours(w, at(12, 0))).toBe(false);
+  });
+  test("未配置时段永不静默", () => {
+    expect(isInQuietHours(null, at(3, 0))).toBe(false);
   });
 });
 

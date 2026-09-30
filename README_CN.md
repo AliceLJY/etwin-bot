@@ -1,13 +1,13 @@
 # etwin-bot
 
-一个只服务单一操作者、会主动开口的 Telegram 数字搭子。日常节奏主要由模型判断；操作者发出 `/quiet` 后，代码会在调用 LLM 前确定性静默 24 小时。
+一个只服务单一操作者、会主动开口的 Telegram 数字搭子。日常节奏主要由模型判断；操作者发出 `/quiet` 后，代码会在调用 LLM 前确定性静默 24 小时；也可以用 `ETWIN_QUIET_HOURS` 设一个每晚固定的静默时段。
 
 [English](README.md) | **中文**
 
 ## 设计原则
 
 - **节奏主要交给模型**：bot 周期性醒来，模型结合 context、prompt policy 和互动历史决定 `ping` / `silent`
-- **操作者有确定性静默权**：`/quiet` 直接拦截 24 小时 proactive tick，不消耗 provider call；其余节奏规则留在所选 prompt/persona
+- **操作者有确定性静默权**：`/quiet` 直接拦截 24 小时 proactive tick，不消耗 provider call；可选的夜间时段 `ETWIN_QUIET_HOURS`（如 `0-8`）同样在调用前拦截；其余节奏规则留在所选 prompt/persona
 - **人格可私有定制**：仓库跟踪的 `persona/` 与 `prompts/` 文件是作者自己在用的示例（只有两个 digital-clone 文件是中性模板），使用者应替换成自己的；私人调节放在 gitignored 的 `.local.md`
 - **后端可切换**：支持 Claude Agent SDK、`codex exec`、AGY CLI 和 Kimi CLI；都复用各自本机登录态而非项目内 API key
 - **TG 单用户边界**：非 dry-run 启动必须配置精确的 `ALICE_CHAT_ID`，所有会进入工具链路的文字/媒体 handler 都会再次校验；应使用独立 bot token 和 chat
@@ -112,7 +112,7 @@ bash start.sh
 
 ## 主动节奏策略
 
-普通节奏由当前 self-decision prompt 和 persona 决定。现有 E-tuning / Codex / AGY 规则把 02:00–06:00 视为睡眠窗口；刚结束对话、近期刚 ping 或连续未读时会倾向后退，也不允许发空洞的“在吗”。这些是模型指令，具体阈值可随所选 prompt 改变；只有仍在有效期内的 `/quiet` 是代码层硬门。
+普通节奏由当前 self-decision prompt 和 persona 决定。现有 E-tuning / Codex / AGY 规则把 02:00–06:00 视为睡眠窗口；刚结束对话、近期刚 ping 或连续未读时会倾向后退，也不允许发空洞的“在吗”。这些是模型指令，具体阈值可随所选 prompt 改变。代码层硬门只有两个：仍在有效期内的 `/quiet`，以及配置了的话 `ETWIN_QUIET_HOURS` 夜间时段（本地时间，含起点不含终点，可跨午夜如 `23-7`）——落在其中的 tick 在调用模型前直接返回，你主动发的消息照常回复。
 
 ## 看到 bot 走偏怎么办
 
